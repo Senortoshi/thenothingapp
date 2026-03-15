@@ -16,19 +16,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { reconcile } from "@/services/junglebus.service";
 import { sendAlert } from "@/lib/alerts";
-
-// ---------------------------------------------------------------------------
-// Auth guard
-// ---------------------------------------------------------------------------
-
-function verifyCronSecret(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    return process.env.NODE_ENV === "development";
-  }
-  const auth = req.headers.get("authorization") ?? "";
-  return auth === `Bearer ${secret}`;
-}
+import { verifyCronSecret } from "@/lib/auth";
 
 // ---------------------------------------------------------------------------
 // Route handler

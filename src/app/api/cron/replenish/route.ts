@@ -30,19 +30,54 @@ import {
   ALERT_WALLET_MIN_SATS,
 } from "@/lib/constants";
 import { Transaction, P2PKH } from "@bsv/sdk";
+import { verifyCronSecret } from "@/lib/auth";
+import { db } from "@/db";
+import { walletState } from "@/db/schema";
+import { eq, sql } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
-// Auth guard
+// Replenish mutex helpers (wallet_state.is_replenishing)
 // ---------------------------------------------------------------------------
 
-function verifyCronSecret(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    // No secret configured — only allow in development
-    return process.env.NODE_ENV === "development";
-  }
-  const auth = req.headers.get("authorization") ?? "";
-  return auth === `Bearer ${secret}`;
+const STALE_LOCK_MINUTES = 5;
+
+/**
+ * Atomically acquire the replenish lock.
+ * Returns true if we got the lock, false if another invocation holds it.
+ * Also force-releases stale locks (updated_at > STALE_LOCK_MINUTES ago).
+ */
+async function acquireReplenishLock(): Promise<boolean> {
+  // First: force-release stale lock if it exists
+  await db
+    .update(walletState)
+    .set({ isReplenishing: false, updatedAt: new Date() })
+    .where(
+      sql`${walletState.id} = 1
+        AND ${walletState.isReplenishing} = TRUE
+        AND ${walletState.updatedAt} < NOW() - INTERVAL '${sql.raw(String(STALE_LOCK_MINUTES))} minutes'`
+    );
+
+  // Atomically set is_replenishing = TRUE only if currently FALSE
+  const result = await db
+    .update(walletState)
+    .set({ isReplenishing: true, updatedAt: new Date() })
+    .where(
+      sql`${walletState.id} = 1 AND ${walletState.isReplenishing} = FALSE`
+    );
+
+  // drizzle returns { rowCount } for postgres-js driver
+  const rowCount = (result as unknown as { rowCount: number }).rowCount ?? 0;
+  return rowCount > 0;
+}
+
+/**
+ * Release the replenish lock.
+ */
+async function releaseReplenishLock(): Promise<void> {
+  await db
+    .update(walletState)
+    .set({ isReplenishing: false, updatedAt: new Date() })
+    .where(eq(walletState.id, 1));
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +227,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Acquire the replenish mutex — bail if another invocation is already running
+  const gotLock = await acquireReplenishLock();
+  if (!gotLock) {
+    console.log("[cron/replenish] Another invocation is already running, skipping");
+    return NextResponse.json({
+      ok: true,
+      action: "skipped",
+      reason: "Another replenish invocation is already running",
+    });
+  }
+
   try {
     const stats = await getPoolStats();
 
@@ -254,6 +300,11 @@ export async function GET(req: NextRequest) {
         error: err instanceof Error ? err.message : "Unknown error",
       },
       { status: 500 }
+    );
+  } finally {
+    // Always release the mutex, even on error or early return
+    await releaseReplenishLock().catch((e) =>
+      console.error("[cron/replenish] Failed to release lock:", e)
     );
   }
 }

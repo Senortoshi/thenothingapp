@@ -6,7 +6,7 @@ import {
   LockingScript,
 } from "@bsv/sdk";
 import { buildCommentOpReturn } from "@/lib/op-return";
-import { FEE_PER_KB, APPROX_TX_BYTES, MIN_FEE } from "@/lib/constants";
+import { FEE_PER_KB, MIN_FEE } from "@/lib/constants";
 
 export interface UtxoInput {
   txid: string;
@@ -43,7 +43,7 @@ export function getFundingAddress(): string {
 /**
  * Calculates the miner fee for a transaction of the given byte length.
  */
-export function calculateFee(byteLength: number = APPROX_TX_BYTES): number {
+export function calculateFee(byteLength: number): number {
   const fee = Math.ceil((byteLength * FEE_PER_KB) / 1000);
   return Math.max(fee, MIN_FEE);
 }
@@ -78,21 +78,20 @@ export async function buildCommentTransaction(params: {
   const p2pkh = new P2PKH();
   const changeLockingScript: LockingScript = p2pkh.lock(address);
 
-  // 3. Estimate fee
-  const fee = calculateFee(APPROX_TX_BYTES);
-  const changeAmount = utxo.satoshis - fee;
-
-  if (changeAmount < 1) {
-    throw new Error(
-      `UTXO too small: ${utxo.satoshis} sats — fee is ${fee} sats`
-    );
-  }
-
-  // 4. Build the source transaction output for signing
+  // 3. Build the source transaction output for signing
   //    @bsv/sdk requires sourceTransaction OR (sourceSatoshis + lockingScript) on unlock()
   const sourceLockingScript = Script.fromHex(utxo.scriptHex) as LockingScript;
 
-  // 5. Build the transaction
+  // 4. Build the transaction with a placeholder change amount (will adjust after sizing)
+  const preliminaryFee = calculateFee(300); // conservative initial estimate
+  let changeAmount = utxo.satoshis - preliminaryFee;
+
+  if (changeAmount < 1) {
+    throw new Error(
+      `UTXO too small: ${utxo.satoshis} sats — estimated fee is ${preliminaryFee} sats`
+    );
+  }
+
   const tx = new Transaction();
 
   tx.addInput({
@@ -119,7 +118,22 @@ export async function buildCommentTransaction(params: {
     lockingScript: changeLockingScript,
   });
 
-  // 6. Sign (async in @bsv/sdk v1)
+  // 5. Sign to get actual tx size
+  await tx.sign();
+
+  // 6. Calculate fee from actual serialized size, then rebuild if fee changed
+  const actualTxBytes = tx.toHex().length / 2; // hex chars / 2 = bytes
+  const fee = calculateFee(actualTxBytes);
+  changeAmount = utxo.satoshis - fee;
+
+  if (changeAmount < 1) {
+    throw new Error(
+      `UTXO too small: ${utxo.satoshis} sats — actual fee is ${fee} sats`
+    );
+  }
+
+  // Update the change output with the correct amount and re-sign
+  tx.outputs[1].satoshis = changeAmount;
   await tx.sign();
 
   const txHex = tx.toHex();

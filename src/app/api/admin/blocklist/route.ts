@@ -18,34 +18,7 @@ import { db } from "@/db";
 import { txidBlocklist } from "@/db/schema";
 import { sql, eq, and } from "drizzle-orm";
 import { z } from "zod";
-
-// ---------------------------------------------------------------------------
-// Auth guard
-// ---------------------------------------------------------------------------
-
-function requireAdmin(req: NextRequest): NextResponse | null {
-  const adminKey = process.env.ADMIN_API_KEY;
-  if (!adminKey) {
-    return NextResponse.json(
-      { error: "Admin API is not configured (ADMIN_API_KEY not set)." },
-      { status: 503 }
-    );
-  }
-
-  const authHeader = req.headers.get("authorization") ?? "";
-  const token = authHeader.startsWith("Bearer ")
-    ? authHeader.slice(7).trim()
-    : null;
-
-  if (!token || token !== adminKey) {
-    return NextResponse.json(
-      { error: "Unauthorized." },
-      { status: 401 }
-    );
-  }
-
-  return null; // authorized
-}
+import { requireAdmin } from "@/lib/auth";
 
 // ---------------------------------------------------------------------------
 // Validation schemas

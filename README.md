@@ -2,6 +2,8 @@
 
 An on-chain comment box. Every comment is permanently stored on BSV mainnet via `OP_RETURN`. The app pays all transaction fees — users post for free.
 
+**We're building this to save human lives.** Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to help.
+
 **Stack:** Next.js 14 · Drizzle ORM · Supabase (Postgres) · Upstash Redis · @bsv/sdk · TAAL ARC
 
 ---

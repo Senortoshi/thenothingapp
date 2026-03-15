@@ -13,9 +13,13 @@ export async function CommentFeedServer(): Promise<{
 }> {
   try {
     const rows = await db.execute(sql`
-      SELECT id, txid, display_name, comment_text, parent_txid, created_at
-      FROM comments
-      ORDER BY created_at DESC, id DESC
+      SELECT c.id, c.txid, c.display_name, c.comment_text, c.parent_txid, c.created_at
+      FROM comments c
+      WHERE NOT EXISTS (
+        SELECT 1 FROM txid_blocklist bl
+        WHERE bl.txid = c.txid AND bl.is_active = TRUE
+      )
+      ORDER BY c.created_at DESC, c.id DESC
       LIMIT ${COMMENTS_PAGE_SIZE}
     `);
 

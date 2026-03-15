@@ -13,24 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { reconcile, backfillFromBlock } from "@/services/junglebus.service";
-
-function requireAdmin(req: NextRequest): NextResponse | null {
-  const adminKey = process.env.ADMIN_API_KEY;
-  if (!adminKey) {
-    return NextResponse.json(
-      { error: "Admin API is not configured (ADMIN_API_KEY not set)." },
-      { status: 503 }
-    );
-  }
-  const authHeader = req.headers.get("authorization") ?? "";
-  const token = authHeader.startsWith("Bearer ")
-    ? authHeader.slice(7).trim()
-    : null;
-  if (!token || token !== adminKey) {
-    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  }
-  return null;
-}
+import { requireAdmin } from "@/lib/auth";
 
 const reconcileSchema = z.object({
   fromBlock: z.number().int().min(0),

@@ -3,12 +3,13 @@ export const APP_PREFIX = "NothingApp";
 export const PROTOCOL_VERSION = "1.0";
 export const ACTION_COMMENT = "comment";
 
-// ARC broadcast endpoint
+// ARC broadcast endpoints
 export const ARC_URL = "https://arc.taal.com/v1/tx";
+export const GORILLAPOOL_ARC_URL = "https://arc.gorillapool.io/v1/tx";
 
 // Dust / fee constants
 export const DUST_LIMIT = 1; // satoshis — OP_RETURN outputs are 0, P2PKH min is 1
-export const FEE_PER_KB = 10; // satoshis per 1000 bytes (BSV mainnet standard)
+export const FEE_PER_KB = 1000; // satoshis per 1000 bytes (BSV mainnet standard)
 export const APPROX_TX_BYTES = 300; // conservative estimate for a 1-in, 2-out tx
 export const MIN_FEE = 5; // absolute minimum fee in satoshis
 
