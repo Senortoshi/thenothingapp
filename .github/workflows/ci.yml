@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Lint, typecheck, and build
+  # Runs on every PR and push to main/develop.
+  # ---------------------------------------------------------------------------
+  check:
+    name: Lint, Typecheck & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        # next build runs tsc internally, but this gives faster feedback
+        run: npx tsc --noEmit
+
+      - name: Build
+        # DATABASE_URL must be set for Next.js build (even though it's not
+        # called at build time, the Drizzle config imports it at module level).
+        # We use a dummy value here — the build only needs the type, not a live DB.
+        # BSV_FUNDING_KEY is intentionally NOT set in CI — it must never appear in logs.
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+          NEXT_PUBLIC_MAX_COMMENT_LENGTH: "512"
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # Deploy to Vercel staging (develop branch only)
+  # Requires these GitHub secrets:
+  #   VERCEL_TOKEN        — from https://vercel.com/account/tokens
+  #   VERCEL_ORG_ID       — from .vercel/project.json after `vercel link`
+  #   VERCEL_PROJECT_ID   — from .vercel/project.json after `vercel link`
+  # ---------------------------------------------------------------------------
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: check
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+
+    environment:
+      name: staging
+      url: ${{ steps.deploy.outputs.preview-url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Vercel (preview)
+        id: deploy
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          # No --prod flag = preview deployment (staging)
+          working-directory: ./
+
+  # ---------------------------------------------------------------------------
+  # Deploy to Vercel production (main branch only)
+  # ---------------------------------------------------------------------------
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    environment:
+      name: production
+      url: https://nothing-app.vercel.app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Vercel (production)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: "--prod"
+          working-directory: ./

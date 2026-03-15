@@ -1,0 +1,11 @@
+---
+description: Git workflow — auto-commit and push after every change
+alwaysApply: true
+---
+
+# Git workflow
+
+- **After any change** (edits, new files, deletions): automatically save work via git.
+- **Stage all changes**, commit with a short descriptive message (e.g. "Add feature X", "Fix Y"), then **push to the current branch**.
+- **Do not** ask for approval before commit or push — do it automatically.
+- Keep commit messages concise and descriptive of what changed.
