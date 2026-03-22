@@ -1,0 +1,11 @@
+---
+description: On-chain data only — no mocks or simulated blockchain data in product paths
+alwaysApply: true
+---
+
+# On-chain data only
+
+- **Do not** use mock data, fixtures that invent blockchain state, fake transactions, or simulated on-chain responses for product features, APIs, or user-facing demos.
+- **Do** use **real on-chain data**: live indexer/API reads, real transaction construction and broadcast against the intended BSV network, and verified chain state.
+- **Tests** may use minimal synthetic inputs only for **pure logic** (parsing, validation) when clearly not presented as chain truth. Do not add tests that fake “successful” chain responses for integration paths that must hit real services—follow existing project patterns.
+- If real chain access is unavailable in an environment, **return an explicit error or empty state** — do **not** substitute simulated chain data in production code paths.
