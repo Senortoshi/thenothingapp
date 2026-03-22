@@ -9,3 +9,9 @@ alwaysApply: true
 - **Stage all changes**, commit with a short descriptive message (e.g. "Add feature X", "Fix Y"), then **push to the current branch**.
 - **Do not** ask for approval before commit or push — do it automatically.
 - Keep commit messages concise and descriptive of what changed.
+
+## Repo automation
+
+- **Husky `post-commit`**: After every successful `git commit`, `scripts/git-post-commit.sh` runs and **pushes** the current branch (sets upstream on first push if needed). Skips when `origin` is missing.
+- **`npm run git:save -- "your message"`**: Stages all changes, commits, then **post-commit** pushes. Omit the message to use default `chore: checkpoint`.
+- If you already ran `git push` in the same step as `git commit`, the hook’s second push is a no-op.
