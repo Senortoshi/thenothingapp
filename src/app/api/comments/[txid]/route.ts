@@ -2,12 +2,14 @@
  * GET /api/comments/[txid]
  *
  * Fetch a single comment by BSV txid.
- * Returns 410 Gone if the txid is blocklisted (MAX-3).
+ * Reads directly from the blockchain via WhatsOnChain.
+ * Returns 410 Gone if the txid is blocklisted.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/db";
-import { sql } from "drizzle-orm";
+import { getTxHex } from "@/lib/woc";
+import { parseOpReturnComment } from "@/lib/op-return";
+import { isBlocklisted } from "@/lib/blocklist";
 
 interface RouteParams {
   params: { txid: string };
@@ -28,56 +30,31 @@ export async function GET(
   }
 
   try {
-    // Check blocklist first — fast indexed lookup
-    const blockedRows = await db.execute(sql`
-      SELECT reason FROM txid_blocklist
-      WHERE txid = ${txid} AND is_active = TRUE
-      LIMIT 1
-    `);
-
-    if ((blockedRows as unknown[]).length > 0) {
+    // Check blocklist first
+    if (await isBlocklisted(txid)) {
       return NextResponse.json(
         { error: "This content is no longer available.", txid },
         { status: 410 } // 410 Gone
       );
     }
 
-    // Fetch the comment
-    const rows = await db.execute(sql`
-      SELECT id, txid, display_name, comment_text, parent_txid, created_at
-      FROM comments
-      WHERE txid = ${txid}
-      LIMIT 1
-    `);
+    // Fetch raw tx from chain and parse OP_RETURN
+    const hex = await getTxHex(txid);
+    const parsed = parseOpReturnComment(hex);
 
-    type CommentRow = {
-      id: number | string;
-      txid: string;
-      display_name: string;
-      comment_text: string;
-      parent_txid: string | null;
-      created_at: Date | string;
-    };
-
-    const row = (rows as unknown as CommentRow[])[0];
-
-    if (!row) {
+    if (!parsed) {
       return NextResponse.json(
-        { error: "Comment not found" },
+        { error: "Comment not found or not a valid BSVibes comment" },
         { status: 404 }
       );
     }
 
     return NextResponse.json({
-      id: Number(row.id),
-      txid: row.txid,
-      displayName: row.display_name,
-      commentText: row.comment_text,
-      parentTxid: row.parent_txid,
-      createdAt:
-        row.created_at instanceof Date
-          ? row.created_at.toISOString()
-          : String(row.created_at),
+      txid,
+      displayName: parsed.displayName || "Anonymous",
+      commentText: parsed.commentText,
+      parentTxid: parsed.parentTxid ?? null,
+      createdAt: parsed.timestamp,
     });
   } catch (err) {
     console.error(`[GET /api/comments/${txid}]`, err);
