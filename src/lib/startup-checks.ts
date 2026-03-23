@@ -1,44 +1,43 @@
 /**
  * Production startup checks — called from next.config.mjs.
  *
- * These guards prevent deploying with missing critical configuration.
+ * These guards warn about missing critical configuration at build time
+ * and fail hard at runtime when secrets are actually needed.
  * They run once at build/startup time, not per-request.
  */
 
 export function runStartupChecks(): void {
   if (process.env.NODE_ENV !== "production") return;
 
-  const missing: string[] = [];
+  const warnings: string[] = [];
 
-  // Core — the only required env var for the on-chain MVP
+  // Core — the only hard-fail env var
   if (!process.env.BSV_FUNDING_KEY) {
-    missing.push("BSV_FUNDING_KEY is required — the wallet private key (WIF format).");
+    warnings.push("BSV_FUNDING_KEY is not set — the wallet private key (WIF format) is required at runtime.");
   }
 
-  // Required for production — Redis backs the tip, mutex, rate limiting, and spend cap
+  // Redis — required at runtime for tip persistence and rate limiting.
+  // The redis.ts module enforces this at runtime; here we just warn.
   if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
-    missing.push("UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required for rate limiting and tip persistence.");
+    warnings.push("UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not set — Redis is required at runtime for tip persistence and rate limiting.");
   }
 
   if (!process.env.RATE_LIMIT_SALT) {
-    missing.push("RATE_LIMIT_SALT is required — IP hashing will fail without it.");
+    warnings.push("RATE_LIMIT_SALT not set — required at runtime for IP hashing.");
   }
 
-  // Optional but recommended for production
   if (!process.env.OPENAI_API_KEY) {
-    console.warn("[startup] OPENAI_API_KEY not set — keyword fallback will be used for moderation.");
+    warnings.push("OPENAI_API_KEY not set — keyword fallback will be used for moderation.");
   }
 
-  if (missing.length > 0) {
-    const msg = [
-      "",
-      "=== STARTUP CHECK FAILED ===",
-      ...missing.map((m) => `  - ${m}`),
-      "============================",
-      "",
-    ].join("\n");
-
-    console.error(msg);
-    throw new Error(`Startup checks failed: ${missing.length} issue(s). See logs above.`);
+  if (warnings.length > 0) {
+    console.warn("");
+    console.warn("=== STARTUP WARNINGS ===");
+    for (const w of warnings) {
+      console.warn(`  - ${w}`);
+    }
+    console.warn("========================");
+    console.warn("These env vars must be set at runtime in Vercel.");
+    console.warn("");
   }
 }

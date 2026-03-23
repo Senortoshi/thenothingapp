@@ -1,3 +1,9 @@
+// Production startup checks — fail fast on missing critical config
+if (process.env.NODE_ENV === "production") {
+  const { runStartupChecks } = await import("./src/lib/startup-checks.ts");
+  runStartupChecks();
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // postgres driver uses Node.js native TLS — must run in Node runtime, not Edge.
@@ -27,6 +33,30 @@ const nextConfig = {
           {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
+          },
+          {
+            // 2-year max-age; tells browsers to always use HTTPS for this origin.
+            key: "Strict-Transport-Security",
+            value: "max-age=63072000; includeSubDomains; preload",
+          },
+          {
+            // 'unsafe-inline' is required for the inline theme-detection script
+            // injected in layout.tsx that runs before hydration to avoid FOUC.
+            // connect-src allows the WhatsOnChain API used for BSV lookups.
+            // font-src and the googleapis style-src entry allow Next.js to load
+            // Inter and JetBrains Mono from Google Fonts. Without these the
+            // font CSS fetch is blocked, which in strict webviews (e.g. Cursor
+            // Simple Browser) can stall chunk loading and prevent React hydration.
+            key: "Content-Security-Policy",
+            value: [
+              "default-src 'self'",
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+              "font-src 'self' https://fonts.gstatic.com",
+              "img-src 'self' data:",
+              "connect-src 'self' https://api.whatsonchain.com ws://localhost:* http://localhost:*",
+              "frame-ancestors 'none'",
+            ].join("; "),
           },
         ],
       },
