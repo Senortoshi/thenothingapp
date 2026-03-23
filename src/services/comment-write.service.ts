@@ -1,9 +1,9 @@
-import { db } from "@/db";
-import { comments } from "@/db/schema";
-import { checkoutUtxo, markUtxoSpent, releaseUtxo } from "./utxo-pool.service";
 import { buildCommentTransaction } from "./wallet.service";
 import { broadcastTransaction } from "./broadcast.service";
-import { moderateComment, ModerationUnavailableError } from "./moderation.service";
+import { moderateComment, ModerationUnavailableError, type CrisisResources } from "./moderation.service";
+import { recordSpend } from "@/lib/rate-limiter";
+import { acquireTipMutex, releaseTipMutex, getTip, setTip, recoverTipFromChain } from "@/lib/utxo-tip";
+import { invalidateFeedCache } from "./comment-read.service";
 import type { PostCommentInput } from "@/lib/validators";
 
 export interface WriteCommentResult {
@@ -16,13 +16,15 @@ export interface WriteCommentResult {
 
 /**
  * Orchestrates posting a comment on-chain:
- *   1. Lock a UTXO
- *   2. Build + sign the OP_RETURN transaction
- *   3. Broadcast to ARC
- *   4. Persist to Postgres
- *   5. Mark UTXO spent
+ *   1. Moderate content (fail-closed)
+ *   2. Acquire the Redis tip mutex
+ *   3. Build + sign the OP_RETURN transaction
+ *   4. Broadcast to ARC
+ *   5. Update the Redis tip to the change output
+ *   6. Release mutex
  *
- * On any failure after locking, the UTXO is released back to free.
+ * The tip chain replaces the Postgres UTXO pool — every transaction spends
+ * the current tip and the change output becomes the next tip.
  */
 export async function writeComment(
   input: PostCommentInput,
@@ -33,14 +35,22 @@ export async function writeComment(
 
   // Step 0: Content moderation — MUST run before any on-chain work
   // Fail CLOSED: if the moderation API is configured but unreachable, reject.
+  // displayName is included in the scan because it also goes on-chain verbatim.
+  // The separator prevents a keyword being split across the two fields.
+  const moderationInput = `${displayName}\n---\n${commentText}`;
   try {
-    const modResult = await moderateComment(commentText);
+    const modResult = await moderateComment(moderationInput);
     if (!modResult.approved) {
-      throw new ServiceError(
-        `CONTENT_VIOLATION:${modResult.violationCategory ?? "policy"}`,
+      const code = `CONTENT_VIOLATION:${modResult.violationCategory ?? "policy"}`;
+      const err = new ServiceError(
+        code,
         modResult.violationDetails ?? "Comment violates content policy.",
         400
       );
+      if (code.startsWith("CONTENT_VIOLATION:self_harm") && modResult.crisisResources) {
+        err.crisisResources = modResult.crisisResources;
+      }
+      throw err;
     }
   } catch (err) {
     if (err instanceof ServiceError) throw err;
@@ -60,12 +70,13 @@ export async function writeComment(
     );
   }
 
-  // Step 1: Lock a UTXO
-  const utxo = await checkoutUtxo(requestId);
-  if (!utxo) {
+  // Step 1: Acquire tip mutex — serialises access so only one request
+  // can spend the tip at a time. The 15 s TTL prevents deadlocks.
+  const acquired = await acquireTipMutex(requestId);
+  if (!acquired) {
     throw new ServiceError(
-      "NO_UTXOS",
-      "The app is out of funded UTXOs. Please try again in a moment.",
+      "BUSY",
+      "Processing another comment. Please try again in a moment.",
       503
     );
   }
@@ -73,9 +84,22 @@ export async function writeComment(
   let txid: string;
 
   try {
-    // Step 2: Build + sign the transaction
-    const { txHex, txid: builtTxid } = await buildCommentTransaction({
-      utxo,
+    // Step 2: Get the current tip; recover from chain if missing
+    let tip = await getTip();
+    if (!tip) {
+      tip = await recoverTipFromChain();
+    }
+    if (!tip) {
+      throw new ServiceError(
+        "NO_UTXOS",
+        "The app is out of funded UTXOs. Please try again in a moment.",
+        503
+      );
+    }
+
+    // Step 3: Build + sign the transaction
+    const { txHex, txid: builtTxid, fee, changeAmount, changeScriptHex } = await buildCommentTransaction({
+      utxo: tip,
       commentText,
       displayName,
       timestamp,
@@ -84,58 +108,41 @@ export async function writeComment(
 
     txid = builtTxid;
 
-    // Step 3: Broadcast to ARC
-    const arcResult = await broadcastTransaction(txHex);
-
-    // Use ARC's canonical txid if available (should match, but be safe)
-    txid = arcResult.txid ?? txid;
-  } catch (err) {
-    // Release the UTXO so it can be used by the next request
-    await releaseUtxo(utxo.id).catch(() => {
-      // Non-critical — stale lock recovery will clean this up
-    });
-
-    if (err instanceof ServiceError) throw err;
-
-    throw new ServiceError(
-      "BROADCAST_FAILED",
-      err instanceof Error ? err.message : "Failed to broadcast transaction",
-      502
-    );
-  }
-
-  try {
-    // Step 4: Persist the comment
-    const now = new Date();
-    await db.insert(comments).values({
-      txid,
-      displayName,
-      commentText,
-      parentTxid: parentTxid ?? null,
-      createdAt: now,
-    });
-
-    // Step 5: Mark UTXO as spent
-    await markUtxoSpent(utxo.id);
-
-    return {
-      txid,
-      displayName,
-      commentText,
-      parentTxid,
-      createdAt: now,
+    // Step 4: Optimistic tip update — set the tip to the expected change
+    // output BEFORE broadcast. If broadcast succeeds and the function crashes
+    // after, the tip is already correct. If broadcast fails, we roll back.
+    const newTip = {
+      txid: builtTxid,
+      vout: 1, // change is always output index 1
+      satoshis: changeAmount,
+      scriptHex: changeScriptHex,
     };
-  } catch (err) {
-    // TX was broadcast — can't undo that. Log and surface a degraded success.
-    console.error("[comment-write] Failed to persist comment after broadcast", {
-      txid,
-      err,
-    });
+    await setTip(newTip);
 
-    // Still mark utxo spent (best effort)
-    await markUtxoSpent(utxo.id).catch(() => {});
+    // Step 5: Broadcast to ARC
+    try {
+      const arcResult = await broadcastTransaction(txHex);
+      // Use ARC's canonical txid if available (should match, but be safe)
+      if (arcResult.txid && arcResult.txid !== builtTxid) {
+        txid = arcResult.txid;
+        await setTip({ ...newTip, txid });
+      }
+    } catch (broadcastErr) {
+      // Broadcast failed — roll back tip to the original UTXO
+      await setTip(tip);
+      throw broadcastErr;
+    }
 
-    // Return what we have — the on-chain write succeeded
+    // Fire-and-forget: record the on-chain spend against the daily cap
+    recordSpend(fee).catch((err) =>
+      console.warn("[comment-write] recordSpend failed:", err)
+    );
+
+    // Fire-and-forget: bust the feed cache so the next GET sees the new post
+    invalidateFeedCache().catch((err) =>
+      console.warn("[comment-write] invalidateFeedCache failed:", err)
+    );
+
     return {
       txid,
       displayName,
@@ -143,10 +150,24 @@ export async function writeComment(
       parentTxid,
       createdAt: new Date(),
     };
+  } catch (err) {
+    if (err instanceof ServiceError) throw err;
+
+    console.error("[comment-write] Broadcast failed:", err);
+    throw new ServiceError(
+      "BROADCAST_FAILED",
+      "Failed to broadcast transaction. Please try again.",
+      502
+    );
+  } finally {
+    // Always release the mutex, even on error
+    await releaseTipMutex(requestId).catch(() => {});
   }
 }
 
 export class ServiceError extends Error {
+  crisisResources?: CrisisResources;
+
   constructor(
     public readonly code: string,
     message: string,
