@@ -1,126 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Ratelimit, type Duration } from "@upstash/ratelimit";
-import { Redis } from "@upstash/redis";
-import { db } from "@/db";
-import { sql } from "drizzle-orm";
 import { postCommentSchema, getCommentsSchema } from "@/lib/validators";
 import { writeComment, ServiceError } from "@/services/comment-write.service";
-import { COMMENTS_PAGE_SIZE } from "@/lib/constants";
+import { getComments } from "@/services/comment-read.service";
 import { randomBytes } from "crypto";
-
-// ---------------------------------------------------------------------------
-// Rate limiters — two sliding windows per IP
-//   • Per-minute : 5 requests per 60s
-//   • Per-hour   : 50 requests per 3600s
-// ---------------------------------------------------------------------------
-
-interface RateLimiters {
-  perMinute: Ratelimit;
-  perHour: Ratelimit;
-}
-
-let limiters: RateLimiters | null = null;
-
-function getRateLimiters(): RateLimiters | null {
-  if (
-    !process.env.UPSTASH_REDIS_REST_URL ||
-    !process.env.UPSTASH_REDIS_REST_TOKEN
-  ) {
-    return null; // Rate limiting disabled — env vars not configured
-  }
-
-  if (!limiters) {
-    const redis = new Redis({
-      url: process.env.UPSTASH_REDIS_REST_URL,
-      token: process.env.UPSTASH_REDIS_REST_TOKEN,
-    });
-
-    limiters = {
-      perMinute: new Ratelimit({
-        redis,
-        limiter: Ratelimit.slidingWindow(
-          parseInt(process.env.RATE_LIMIT_MAX ?? "5", 10),
-          (`${process.env.RATE_LIMIT_WINDOW ?? "60"}s`) as Duration
-        ),
-        analytics: false,
-        prefix: "nothing_app:rl:min",
-      }),
-      perHour: new Ratelimit({
-        redis,
-        limiter: Ratelimit.slidingWindow(
-          parseInt(process.env.RATE_LIMIT_HOURLY_MAX ?? "50", 10),
-          "3600s" as Duration
-        ),
-        analytics: false,
-        prefix: "nothing_app:rl:hour",
-      }),
-    };
-  }
-
-  return limiters;
-}
-
-/**
- * Checks both rate limit windows. Returns the tightest constraint.
- * Gracefully degrades to null on Redis error.
- */
-async function checkRateLimit(
-  ip: string
-): Promise<{ allowed: boolean; limit: number; remaining: number; reset: number; window: string } | null> {
-  const rl = getRateLimiters();
-  if (!rl) return null;
-
-  try {
-    // Run both checks in parallel
-    const [minuteResult, hourResult] = await Promise.all([
-      rl.perMinute.limit(ip),
-      rl.perHour.limit(ip),
-    ]);
-
-    // Minute limit hit
-    if (!minuteResult.success) {
-      return {
-        allowed: false,
-        limit: minuteResult.limit,
-        remaining: minuteResult.remaining,
-        reset: minuteResult.reset,
-        window: "minute",
-      };
-    }
-
-    // Hour limit hit
-    if (!hourResult.success) {
-      return {
-        allowed: false,
-        limit: hourResult.limit,
-        remaining: hourResult.remaining,
-        reset: hourResult.reset,
-        window: "hour",
-      };
-    }
-
-    // Both passed — return the tighter remaining count (minute window)
-    return {
-      allowed: true,
-      limit: minuteResult.limit,
-      remaining: Math.min(minuteResult.remaining, hourResult.remaining),
-      reset: minuteResult.reset,
-      window: "minute",
-    };
-  } catch (err) {
-    // Graceful degradation — Redis unavailable, allow the request
-    console.warn("[rate-limit] Redis check failed, allowing request:", err);
-    return null;
-  }
-}
-
-function getClientIp(req: NextRequest): string {
-  return (
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    req.headers.get("x-real-ip") ??
-    "unknown"
-  );
-}
+import { checkRateLimit } from "@/lib/rate-limiter";
+import { getClientIp } from "@/lib/ip";
 
 // ---------------------------------------------------------------------------
 // GET /api/comments — paginated comment feed
@@ -129,8 +13,7 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = req.nextUrl;
     const parsed = getCommentsSchema.safeParse({
-      cursorCreatedAt: searchParams.get("cursorCreatedAt") ?? undefined,
-      cursorId: searchParams.get("cursorId") ?? undefined,
+      cursorOffset: searchParams.get("cursorOffset") ?? undefined,
       pageSize: searchParams.get("pageSize") ?? undefined,
     });
 
@@ -141,54 +24,10 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const { cursorCreatedAt, cursorId, pageSize } = parsed.data;
-
-    // Cursor-based pagination query — blocklisted txids are excluded
-    const rows = await db.execute(sql`
-      SELECT c.id, c.txid, c.display_name, c.comment_text, c.parent_txid, c.created_at
-      FROM comments c
-      WHERE (
-        ${
-          cursorCreatedAt && cursorId
-            ? sql`(c.created_at, c.id) < (${cursorCreatedAt}::timestamptz, ${cursorId}::bigint)`
-            : sql`TRUE`
-        }
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM txid_blocklist bl
-        WHERE bl.txid = c.txid AND bl.is_active = TRUE
-      )
-      ORDER BY c.created_at DESC, c.id DESC
-      LIMIT ${pageSize ?? COMMENTS_PAGE_SIZE}
-    `);
-
-    type CommentRow = {
-      id: number | string;
-      txid: string;
-      display_name: string;
-      comment_text: string;
-      parent_txid: string | null;
-      created_at: Date | string;
-    };
-
-    const comments = (rows as unknown as CommentRow[]).map((row) => ({
-      id: Number(row.id),
-      txid: row.txid,
-      displayName: row.display_name,
-      commentText: row.comment_text,
-      parentTxid: row.parent_txid,
-      createdAt:
-        row.created_at instanceof Date
-          ? row.created_at.toISOString()
-          : String(row.created_at),
-    }));
-
-    // Build next cursor
-    const lastItem = comments[comments.length - 1];
-    const nextCursor =
-      comments.length === (pageSize ?? COMMENTS_PAGE_SIZE) && lastItem
-        ? { createdAt: lastItem.createdAt, id: lastItem.id }
-        : null;
+    const { comments, nextCursor } = await getComments({
+      cursorOffset: parsed.data.cursorOffset,
+      pageSize: parsed.data.pageSize,
+    });
 
     return NextResponse.json(
       { comments, nextCursor },
@@ -211,29 +50,18 @@ export async function GET(req: NextRequest) {
 // POST /api/comments — create a new on-chain comment
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest) {
-  // Rate limiting — checks both per-minute and per-hour windows
+  // ── Rate limiting — fail closed ──────────────────────────────────────────
   const ip = getClientIp(req);
   const rlResult = await checkRateLimit(ip);
 
-  if (rlResult !== null && !rlResult.allowed) {
+  if (!rlResult.allowed) {
     return NextResponse.json(
-      {
-        error: "Too many requests. Please wait before posting again.",
-        window: rlResult.window,
-      },
-      {
-        status: 429,
-        headers: {
-          "X-RateLimit-Limit": String(rlResult.limit),
-          "X-RateLimit-Remaining": "0",
-          "X-RateLimit-Reset": String(rlResult.reset),
-          "Retry-After": String(Math.ceil((rlResult.reset - Date.now()) / 1000)),
-        },
-      }
+      { error: rlResult.reason },
+      { status: rlResult.status, headers: rlResult.headers }
     );
   }
 
-  // Parse & validate body
+  // ── Parse & validate body ────────────────────────────────────────────────
   let body: unknown;
   try {
     body = await req.json();
@@ -252,16 +80,11 @@ export async function POST(req: NextRequest) {
   // Generate a unique request ID for UTXO locking
   const requestId = randomBytes(8).toString("hex");
 
-  // Build rate limit headers for the success response
-  const rlHeaders: Record<string, string> = {};
-  if (rlResult !== null) {
-    rlHeaders["X-RateLimit-Limit"] = String(rlResult.limit);
-    rlHeaders["X-RateLimit-Remaining"] = String(rlResult.remaining);
-    rlHeaders["X-RateLimit-Reset"] = String(rlResult.reset);
-  }
-
+  // ── Write comment + circuit breaker telemetry ────────────────────────────
   try {
     const result = await writeComment(parsed.data, requestId);
+
+    // Feed cache invalidation already happens inside writeComment() (fire-and-forget)
 
     return NextResponse.json(
       {
@@ -271,16 +94,20 @@ export async function POST(req: NextRequest) {
         parentTxid: result.parentTxid ?? null,
         createdAt: result.createdAt.toISOString(),
       },
-      { status: 201, headers: rlHeaders }
+      { status: 201, headers: rlResult.headers }
     );
   } catch (err) {
     if (err instanceof ServiceError) {
-      return NextResponse.json(
-        { error: err.message, code: err.code },
-        { status: err.statusCode }
-      );
+      // A known service error (e.g. validation, UTXO exhaustion) is not a
+      // broadcast failure in the circuit-breaker sense — don't count it.
+      const body: Record<string, unknown> = { error: err.message, code: err.code };
+      if (err.crisisResources) {
+        body.crisisResources = err.crisisResources;
+      }
+      return NextResponse.json(body, { status: err.statusCode });
     }
 
+    // Unknown error — broadcast failures are tracked by the broadcast service itself
     console.error("[POST /api/comments]", err);
     return NextResponse.json(
       { error: "Internal server error" },
