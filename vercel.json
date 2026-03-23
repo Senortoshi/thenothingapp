@@ -4,30 +4,8 @@
   "functions": {
     "src/app/api/comments/route.ts": {
       "maxDuration": 30
-    },
-    "src/app/api/cron/replenish/route.ts": {
-      "maxDuration": 60
-    },
-    "src/app/api/cron/clear-locks/route.ts": {
-      "maxDuration": 15
-    },
-    "src/app/api/cron/reconcile/route.ts": {
-      "maxDuration": 60
     }
   },
 
-  "crons": [
-    {
-      "path": "/api/cron/replenish",
-      "schedule": "*/5 * * * *"
-    },
-    {
-      "path": "/api/cron/clear-locks",
-      "schedule": "*/2 * * * *"
-    },
-    {
-      "path": "/api/cron/reconcile",
-      "schedule": "*/15 * * * *"
-    }
-  ]
+  "crons": []
 }

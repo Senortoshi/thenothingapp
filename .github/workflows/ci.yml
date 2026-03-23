@@ -34,6 +34,9 @@ jobs:
         # next build runs tsc internally, but this gives faster feedback
         run: npx tsc --noEmit
 
+      - name: Test
+        run: npm run test
+
       - name: Build
         # DATABASE_URL must be set for Next.js build (even though it's not
         # called at build time, the Drizzle config imports it at module level).
