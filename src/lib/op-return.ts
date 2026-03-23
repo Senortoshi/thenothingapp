@@ -1,5 +1,5 @@
 import { Script, LockingScript, OP } from "@bsv/sdk";
-import { APP_PREFIX, PROTOCOL_VERSION, ACTION_COMMENT } from "./constants";
+import { APP_PREFIX, LEGACY_APP_PREFIX, PROTOCOL_VERSION, ACTION_COMMENT } from "./constants";
 
 /**
  * Build the OP_RETURN locking script for a comment.
@@ -126,10 +126,11 @@ export function parseOpReturnComment(txHex: string): ParsedComment | null {
       if (scriptBytes.length >= 2 && scriptBytes[0] === 0x00 && scriptBytes[1] === 0x6a) {
         const fields = extractPushDataFields(scriptBytes, 2);
 
-        // Validate prefix, version, action
+        // Validate prefix, version, action — accept both current and legacy prefix
+        const isOurPrefix = fields[0] === APP_PREFIX || fields[0] === LEGACY_APP_PREFIX;
         if (
           fields.length < 6 ||
-          fields[0] !== APP_PREFIX ||
+          !isOurPrefix ||
           fields[1] !== PROTOCOL_VERSION ||
           fields[2] !== ACTION_COMMENT
         ) {

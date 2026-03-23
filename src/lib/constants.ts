@@ -1,5 +1,7 @@
 // OP_RETURN protocol identifiers
 export const APP_PREFIX = "BSVibes";
+// Legacy prefix used in earlier versions — accepted when reading, never written
+export const LEGACY_APP_PREFIX = "NothingApp";
 export const PROTOCOL_VERSION = "1.0";
 export const ACTION_COMMENT = "comment";
 

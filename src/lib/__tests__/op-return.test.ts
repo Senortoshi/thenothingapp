@@ -242,6 +242,40 @@ describe("parseOpReturnComment — returns null for invalid inputs", () => {
 });
 
 // ---------------------------------------------------------------------------
+// IRI-1c2: parseOpReturnComment — legacy "NothingApp" prefix support
+// ---------------------------------------------------------------------------
+
+describe("parseOpReturnComment — legacy NothingApp prefix", () => {
+  // Real on-chain tx from address 13zF4vyeRQy5MEaS5sdQJYZvMyNzd7PQLe
+  // txid: acd949750702da34cc8556eb6c4ff0853f9b607c0e62191e32ce3bba32ec200d
+  const LEGACY_TX_HEX =
+    "0100000001dc0e7a26b0adc87b366598b5e499886a30cfaf3afb68b4d83a22346ec85ac183" +
+    "000000006b483045022100bdd000880b6c3bf31c144cf3fa7f6753bb70e76d0eed624be339" +
+    "889381288d320220610907bfa490208b40cf4cab0ef1b251b00de84f3521feee359542befe" +
+    "d866844121028913d6a753cd5acda067092da33dd8e44772d84f39ef495e0f3eb6e2fd8ef7" +
+    "8cffffffff02000000000000000052006a0a4e6f7468696e6741707003312e3007636f6d6d" +
+    "656e741a68656c6c6f2066726f6d20746865206e6f7468696e672061707004616e6f6e1832" +
+    "3032362d30332d32325432323a35323a33312e3539325a83260000000000001976a91420c3" +
+    "b45ed7278830f46ab4653fa007c87d6161d188ac00000000";
+
+  it("parses a real on-chain NothingApp comment", () => {
+    const result = parseOpReturnComment(LEGACY_TX_HEX);
+    expect(result).not.toBeNull();
+    expect(result!.commentText).toBe("hello from the nothing app");
+    expect(result!.displayName).toBe("anon");
+    expect(result!.timestamp).toBe("2026-03-22T22:52:31.592Z");
+    expect(result!.parentTxid).toBeUndefined();
+  });
+
+  it("returns the same shape as a BSVibes-prefixed comment", () => {
+    const result = parseOpReturnComment(LEGACY_TX_HEX);
+    expect(result).toHaveProperty("commentText");
+    expect(result).toHaveProperty("displayName");
+    expect(result).toHaveProperty("timestamp");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // IRI-1d: calculateFee (from wallet.service)
 // ---------------------------------------------------------------------------
 
