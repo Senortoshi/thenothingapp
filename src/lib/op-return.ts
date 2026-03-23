@@ -1,5 +1,5 @@
 import { Script, LockingScript, OP } from "@bsv/sdk";
-import { APP_PREFIX, LEGACY_APP_PREFIX, PROTOCOL_VERSION, ACTION_COMMENT } from "./constants";
+import { APP_PREFIX, LEGACY_APP_PREFIX, PROTOCOL_VERSION, ACTION_COMMENT, ACTION_TIP } from "./constants";
 
 /**
  * Build the OP_RETURN locking script for a comment.
@@ -180,6 +180,137 @@ export function parseOpReturnComment(txHex: string): ParsedComment | null {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Tip OP_RETURN — for agent and attributed human tips
+// ---------------------------------------------------------------------------
+
+export interface TipOpReturnParams {
+  commentTxid: string;
+  tipAmountSats: number;
+  agentId: string;      // "fairness-v1", "human", etc.
+  reason: string;       // short justification (max 256 chars)
+  timestamp: string;    // ISO 8601
+}
+
+/**
+ * Build the OP_RETURN locking script for a tip transaction.
+ *
+ * Format:
+ *   OP_FALSE OP_RETURN <APP_PREFIX> <VERSION> tip <commentTxid> <amount> <agentId> <reason> <timestamp>
+ */
+export function buildTipOpReturn(params: TipOpReturnParams): LockingScript {
+  const { commentTxid, tipAmountSats, agentId, reason, timestamp } = params;
+
+  const scriptData: number[] = [];
+  scriptData.push(OP.OP_FALSE);
+  scriptData.push(OP.OP_RETURN);
+
+  const fields = [
+    APP_PREFIX,
+    PROTOCOL_VERSION,
+    ACTION_TIP,
+    commentTxid,
+    String(tipAmountSats),
+    agentId,
+    reason.slice(0, 256),
+    timestamp,
+  ];
+
+  for (const field of fields) {
+    const buf = toBuffer(field);
+    if (buf.length === 0) {
+      scriptData.push(0x00);
+    } else if (buf.length <= 75) {
+      scriptData.push(buf.length);
+      scriptData.push(...buf);
+    } else if (buf.length <= 255) {
+      scriptData.push(0x4c);
+      scriptData.push(buf.length);
+      scriptData.push(...buf);
+    } else if (buf.length <= 65535) {
+      scriptData.push(0x4d);
+      scriptData.push(buf.length & 0xff);
+      scriptData.push((buf.length >> 8) & 0xff);
+      scriptData.push(...buf);
+    } else {
+      throw new Error("Tip reason too large for OP_RETURN");
+    }
+  }
+
+  return Script.fromBinary(scriptData) as unknown as LockingScript;
+}
+
+export interface ParsedTip {
+  commentTxid: string;
+  tipAmountSats: number;
+  agentId: string;
+  reason: string;
+  timestamp: string;
+}
+
+/**
+ * Parses a raw transaction hex and extracts BSVibes tip fields.
+ * Returns null if the transaction is not a valid BSVibes tip.
+ */
+export function parseTipOpReturn(txHex: string): ParsedTip | null {
+  try {
+    const txBytes = Buffer.from(txHex, "hex");
+    let offset = 4;
+
+    const vinCount = readVarInt(txBytes, offset);
+    offset += vinCount.size;
+    for (let i = 0; i < vinCount.value; i++) {
+      offset += 32 + 4;
+      const scriptLen = readVarInt(txBytes, offset);
+      offset += scriptLen.size + scriptLen.value + 4;
+    }
+
+    const voutCount = readVarInt(txBytes, offset);
+    offset += voutCount.size;
+
+    for (let i = 0; i < voutCount.value; i++) {
+      offset += 8;
+      const scriptLen = readVarInt(txBytes, offset);
+      offset += scriptLen.size;
+
+      const scriptStart = offset;
+      const scriptEnd = offset + scriptLen.value;
+      const scriptBytes = txBytes.slice(scriptStart, scriptEnd);
+      offset = scriptEnd;
+
+      if (scriptBytes.length >= 2 && scriptBytes[0] === 0x00 && scriptBytes[1] === 0x6a) {
+        const fields = extractPushDataFields(scriptBytes, 2);
+
+        const isOurPrefix = fields[0] === APP_PREFIX || fields[0] === LEGACY_APP_PREFIX;
+        if (
+          fields.length < 6 ||
+          !isOurPrefix ||
+          fields[1] !== PROTOCOL_VERSION ||
+          fields[2] !== ACTION_TIP
+        ) {
+          continue;
+        }
+
+        return {
+          commentTxid: fields[3],
+          tipAmountSats: parseInt(fields[4], 10) || 0,
+          agentId: fields[5] || "unknown",
+          reason: fields[6] || "",
+          timestamp: fields[7] || "",
+        };
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 /** Reads a Bitcoin varint from buf at offset. Returns value and byte size consumed. */
 function readVarInt(buf: Buffer, offset: number): { value: number; size: number } {
