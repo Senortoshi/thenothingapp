@@ -92,6 +92,7 @@ export async function POST(req: NextRequest) {
         displayName: result.displayName,
         commentText: result.commentText,
         parentTxid: result.parentTxid ?? null,
+        tipAddress: result.tipAddress ?? null,
         createdAt: result.createdAt.toISOString(),
       },
       { status: 201, headers: rlResult.headers }

@@ -108,8 +108,9 @@ export async function buildCommentTransaction(params: {
   displayName: string;
   timestamp: string;
   parentTxid?: string;
+  tipAddress?: string;
 }): Promise<BuildTxResult> {
-  const { utxo, commentText, displayName, timestamp, parentTxid } = params;
+  const { utxo, commentText, displayName, timestamp, parentTxid, tipAddress } = params;
 
   const privateKey = getFundingKey();
   const address = privateKey.toAddress().toString();
@@ -120,6 +121,7 @@ export async function buildCommentTransaction(params: {
     displayName,
     timestamp,
     parentTxid,
+    tipAddress,
   });
 
   // 2. P2PKH change locking script

@@ -18,6 +18,8 @@ function getUtf8ByteLength(str: string): number {
 export function CommentForm({ onCommentPosted }: CommentFormProps) {
   const [commentText, setCommentText] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [tipAddress, setTipAddress] = useState("");
+  const [showTipField, setShowTipField] = useState(false);
   const [state, setState] = useState<PostState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
   const [lastTxid, setLastTxid] = useState("");
@@ -52,6 +54,7 @@ export function CommentForm({ onCommentPosted }: CommentFormProps) {
         body: JSON.stringify({
           commentText: commentText.trim(),
           displayName: displayName.trim() || "Anonymous",
+          ...(tipAddress.trim() ? { tipAddress: tipAddress.trim() } : {}),
         }),
       });
 
@@ -77,6 +80,7 @@ export function CommentForm({ onCommentPosted }: CommentFormProps) {
         displayName: data.displayName,
         commentText: data.commentText,
         parentTxid: data.parentTxid ?? null,
+        tipAddress: data.tipAddress ?? null,
         createdAt: data.createdAt,
       });
 
@@ -187,6 +191,53 @@ export function CommentForm({ onCommentPosted }: CommentFormProps) {
           )}
         </div>
       </div>
+
+      {/* Optional tip address toggle + field */}
+      {!showTipField ? (
+        <button
+          type="button"
+          onClick={() => setShowTipField(true)}
+          disabled={isSubmitting}
+          className="text-xs text-neutral-600 hover:text-amber-500 transition-colors disabled:opacity-50 flex items-center gap-1"
+        >
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M6 2V10M2 6H10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+          Want tips? Add a BSV address
+        </button>
+      ) : (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label
+              htmlFor="tipAddress"
+              className="block text-xs font-medium text-neutral-400"
+            >
+              Your BSV address{" "}
+              <span className="text-neutral-600 font-normal">(for tips)</span>
+            </label>
+            <button
+              type="button"
+              onClick={() => { setShowTipField(false); setTipAddress(""); }}
+              className="text-xs text-neutral-600 hover:text-neutral-400 transition-colors"
+            >
+              Hide
+            </button>
+          </div>
+          <input
+            id="tipAddress"
+            type="text"
+            value={tipAddress}
+            onChange={(e) => setTipAddress(e.target.value)}
+            placeholder="1..."
+            disabled={isSubmitting}
+            autoComplete="off"
+            className="w-full bg-neutral-800/70 border border-neutral-700 rounded-lg px-3 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/50 disabled:opacity-50 transition-all font-mono min-h-[44px]"
+          />
+          <p className="text-xs text-neutral-700 leading-relaxed">
+            Tips go directly to this address on-chain. This address will be permanently public.
+          </p>
+        </div>
+      )}
 
       {/* Error state */}
       {state === "error" && (

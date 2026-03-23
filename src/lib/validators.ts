@@ -18,6 +18,11 @@ export const postCommentSchema = z.object({
     .string()
     .regex(/^[0-9a-f]{64}$/i, "Invalid parent txid")
     .optional(),
+  tipAddress: z
+    .string()
+    .trim()
+    .regex(/^1[a-km-zA-HJ-NP-Z1-9]{25,34}$/, "Invalid BSV address")
+    .optional(),
 });
 
 export type PostCommentInput = z.infer<typeof postCommentSchema>;

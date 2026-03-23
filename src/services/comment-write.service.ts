@@ -11,6 +11,7 @@ export interface WriteCommentResult {
   displayName: string;
   commentText: string;
   parentTxid?: string;
+  tipAddress?: string;
   createdAt: Date;
 }
 
@@ -30,7 +31,7 @@ export async function writeComment(
   input: PostCommentInput,
   requestId: string
 ): Promise<WriteCommentResult> {
-  const { commentText, displayName, parentTxid } = input;
+  const { commentText, displayName, parentTxid, tipAddress } = input;
   const timestamp = new Date().toISOString();
 
   // Step 0: Content moderation — MUST run before any on-chain work
@@ -104,6 +105,7 @@ export async function writeComment(
       displayName,
       timestamp,
       parentTxid,
+      tipAddress,
     });
 
     txid = builtTxid;
@@ -148,6 +150,7 @@ export async function writeComment(
       displayName,
       commentText,
       parentTxid,
+      tipAddress,
       createdAt: new Date(),
     };
   } catch (err) {

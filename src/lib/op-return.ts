@@ -5,7 +5,7 @@ import { APP_PREFIX, LEGACY_APP_PREFIX, PROTOCOL_VERSION, ACTION_COMMENT } from 
  * Build the OP_RETURN locking script for a comment.
  *
  * Format (each field is a separate pushdata):
- *   OP_FALSE OP_RETURN <APP_PREFIX> <VERSION> <ACTION> <comment_text> <display_name> <timestamp> [<parent_txid>]
+ *   OP_FALSE OP_RETURN <APP_PREFIX> <VERSION> <ACTION> <comment_text> <display_name> <timestamp> [<parent_txid>] [<tip_address>]
  *
  * OP_FALSE OP_RETURN makes the output provably unspendable and is the
  * standard BSV data-carrier pattern (replaces bare OP_RETURN).
@@ -15,8 +15,9 @@ export function buildCommentOpReturn(params: {
   displayName: string;
   timestamp: string; // ISO 8601
   parentTxid?: string;
+  tipAddress?: string;
 }): LockingScript {
-  const { commentText, displayName, timestamp, parentTxid } = params;
+  const { commentText, displayName, timestamp, parentTxid, tipAddress } = params;
 
   // Build chunks as UTF-8 buffers
   const chunks: number[][] = [
@@ -30,8 +31,14 @@ export function buildCommentOpReturn(params: {
     toBuffer(timestamp),
   ];
 
-  if (parentTxid) {
-    chunks.push(toBuffer(parentTxid));
+  // parentTxid is positional at index 6. If tipAddress is present but
+  // parentTxid is not, push an empty field to maintain field positions.
+  if (parentTxid || tipAddress) {
+    chunks.push(parentTxid ? toBuffer(parentTxid) : []);
+  }
+
+  if (tipAddress) {
+    chunks.push(toBuffer(tipAddress));
   }
 
   // Encode as a Script: OP_FALSE OP_RETURN then push each data chunk
@@ -79,6 +86,7 @@ export interface ParsedComment {
   displayName: string;
   timestamp: string;
   parentTxid?: string;
+  tipAddress?: string;
 }
 
 /**
@@ -86,7 +94,7 @@ export interface ParsedComment {
  * Returns null if the transaction is not a valid BSVibes comment.
  *
  * Expected OP_RETURN format (each field is a separate pushdata):
- *   OP_FALSE OP_RETURN <APP_PREFIX> <VERSION> <ACTION> <comment_text> <display_name> <timestamp> [<parent_txid>]
+ *   OP_FALSE OP_RETURN <APP_PREFIX> <VERSION> <ACTION> <comment_text> <display_name> <timestamp> [<parent_txid>] [<tip_address>]
  */
 export function parseOpReturnComment(txHex: string): ParsedComment | null {
   try {
@@ -140,11 +148,30 @@ export function parseOpReturnComment(txHex: string): ParsedComment | null {
         const commentText = fields[3];
         const displayName = fields[4] || "Anonymous";
         const timestamp = fields[5];
-        const parentTxid = fields[6] || undefined;
+
+        // Field 6 is parentTxid (64-char hex) or empty. Field 7 is tipAddress.
+        // Discriminate: a 64-char hex string is a txid, a base58 string starting with '1' is an address.
+        let parentTxid: string | undefined;
+        let tipAddress: string | undefined;
+
+        const field6 = fields[6] || undefined;
+        const field7 = fields[7] || undefined;
+
+        if (field6) {
+          if (/^[0-9a-f]{64}$/i.test(field6)) {
+            parentTxid = field6;
+          } else if (/^1[a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(field6)) {
+            tipAddress = field6; // tipAddress in position 6 (no parentTxid)
+          }
+        }
+
+        if (field7 && /^1[a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(field7)) {
+          tipAddress = field7;
+        }
 
         if (!commentText) return null;
 
-        return { commentText, displayName, timestamp, parentTxid };
+        return { commentText, displayName, timestamp, parentTxid, tipAddress };
       }
     }
 

@@ -4,6 +4,7 @@ export const APP_PREFIX = "BSVibes";
 export const LEGACY_APP_PREFIX = "NothingApp";
 export const PROTOCOL_VERSION = "1.0";
 export const ACTION_COMMENT = "comment";
+export const ACTION_TIP = "tip";
 
 // ARC broadcast endpoints
 export const ARC_URL = "https://arc.taal.com/v1/tx";

@@ -1,10 +1,12 @@
 import { formatDistanceToNowStrict } from "@/lib/date-utils";
+import { TipButton } from "./tip-button";
 
 export interface Comment {
   txid: string;
   displayName: string;
   commentText: string;
   parentTxid: string | null;
+  tipAddress: string | null;
   createdAt: string;
 }
 
@@ -145,13 +147,16 @@ export function CommentItem({ comment, onReport }: CommentItemProps) {
           </svg>
         </a>
 
-        {/* BSV network label */}
-        <span
-          className="text-neutral-800 font-mono hidden sm:inline"
-          style={{ fontSize: "10px" }}
-        >
-          BSV
-        </span>
+        {/* Tip button (only shown when commenter provided a tip address) */}
+        <div className="flex items-center gap-2">
+          {comment.tipAddress && <TipButton tipAddress={comment.tipAddress} />}
+          <span
+            className="text-neutral-800 font-mono hidden sm:inline"
+            style={{ fontSize: "10px" }}
+          >
+            BSV
+          </span>
+        </div>
       </div>
     </article>
   );

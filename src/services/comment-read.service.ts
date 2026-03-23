@@ -9,6 +9,7 @@ export interface CommentDTO {
   displayName: string;
   commentText: string;
   parentTxid: string | null;
+  tipAddress: string | null;
   createdAt: string;
 }
 
@@ -65,6 +66,7 @@ export async function getComments(params?: { cursorOffset?: number; pageSize?: n
         displayName: parsed.displayName || "Anonymous",
         commentText: parsed.commentText,
         parentTxid: parsed.parentTxid ?? null,
+        tipAddress: parsed.tipAddress ?? null,
         createdAt: parsed.timestamp,
       });
     } catch { continue; }
