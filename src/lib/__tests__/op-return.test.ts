@@ -18,8 +18,7 @@ import { APP_PREFIX, PROTOCOL_VERSION, ACTION_COMMENT } from "@/lib/constants";
  * The @bsv/sdk Script type exposes .toBinary() → number[].
  */
 function scriptToBytes(script: ReturnType<typeof buildCommentOpReturn>): number[] {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (script as any).toBinary() as number[];
+  return (script as unknown as { toBinary(): number[] }).toBinary();
 }
 
 /** Decodes a pushdata field starting at `offset` in the script byte array. */
@@ -261,18 +260,18 @@ describe("calculateFee", () => {
     expect(calculateFee(largeBytes)).toBe(expected);
   });
 
-  it("uses APPROX_TX_BYTES as default", () => {
+  it("uses APPROX_TX_BYTES as the canonical estimate", () => {
     const expected = Math.max(
       Math.ceil((APPROX_TX_BYTES * FEE_PER_KB) / 1000),
       MIN_FEE
     );
-    expect(calculateFee()).toBe(expected);
+    expect(calculateFee(APPROX_TX_BYTES)).toBe(expected);
   });
 
   it("rounds up (ceil) fractional satoshis", () => {
-    // 1 byte at 10 sat/kb = 0.01 sat → ceil = 1, but MIN_FEE=5 wins
+    // 1 byte at 1000 sat/kb = 1 sat → ceil = 1, but MIN_FEE=5 wins
     expect(calculateFee(1)).toBe(MIN_FEE);
-    // 501 bytes at 10 sat/kb = 5.01 → ceil = 6, above MIN_FEE
-    expect(calculateFee(501)).toBe(6);
+    // 501 bytes at 1000 sat/kb = 501 sats → ceil = 501, above MIN_FEE
+    expect(calculateFee(501)).toBe(Math.ceil((501 * FEE_PER_KB) / 1000));
   });
 });

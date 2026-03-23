@@ -204,8 +204,7 @@ describe("SEC-5: OP_RETURN encoding round-trips without data loss", () => {
 
   function getCommentField(commentText: string): string {
     const script = buildCommentOpReturn({ commentText, displayName: "X", timestamp: TS });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const bytes: number[] = (script as any).toBinary();
+    const bytes: number[] = (script as unknown as { toBinary(): number[] }).toBinary();
     // Parse field index 3 (skip OP_FALSE, OP_RETURN, APP_PREFIX, VERSION, ACTION)
     let offset = 2;
     for (let i = 0; i < 3; i++) {
