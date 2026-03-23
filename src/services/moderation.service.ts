@@ -12,16 +12,59 @@
  * the comment is REJECTED. If no API key is set, the keyword fallback runs.
  */
 
-import { reportToNcmec } from "./ncmec.service";
+// STANDBY: NCMEC reporting — re-enable when ESP registration is complete
+async function reportToNcmec(_incident: unknown): Promise<void> {
+  console.warn("[moderation] NCMEC reporting is on standby. Incident logged only.");
+}
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+export interface CrisisResource {
+  name: string;
+  contact: string;
+  url: string;
+}
+
+export interface CrisisResources {
+  message: string;
+  resources: CrisisResource[];
+}
+
 export interface ModerationResult {
   approved: boolean;
   violationCategory?: string;
   violationDetails?: string;
+  crisisResources?: CrisisResources;
+}
+
+// ---------------------------------------------------------------------------
+// Self-harm categories that trigger crisis resource display
+// ---------------------------------------------------------------------------
+
+const SELF_HARM_CATEGORIES = new Set([
+  "self_harm",
+  "self_harm_intent",
+  "self_harm_instructions",
+]);
+
+export function buildCrisisResources(): CrisisResources {
+  return {
+    message: "If you or someone you know is struggling, help is available.",
+    resources: [
+      {
+        name: "988 Suicide & Crisis Lifeline",
+        contact: "Call or text 988",
+        url: "https://988lifeline.org",
+      },
+      {
+        name: "Crisis Text Line",
+        contact: "Text HOME to 741741",
+        url: "https://www.crisistextline.org",
+      },
+    ],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -58,8 +101,10 @@ const OPENAI_CATEGORY_LABELS: Record<string, string> = {
 async function runOpenAIModeration(text: string): Promise<ModerationResult> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    // No API key — fall through to keyword filter
-    return { approved: true };
+    // Defense in depth: never silently approve — the public moderateComment()
+    // function guards this for production, but this inner function must not
+    // have a hidden bypass path if call flow ever changes.
+    throw new ModerationUnavailableError("OPENAI_API_KEY not configured");
   }
 
   let response: Response;
@@ -71,7 +116,7 @@ async function runOpenAIModeration(text: string): Promise<ModerationResult> {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({ input: text }),
-      signal: AbortSignal.timeout(8000), // 8s timeout
+      signal: AbortSignal.timeout(5000), // 5s timeout — budget: mod(5s) + ARC1(10s) + ARC2(10s) = 25s < 30s maxDuration
     });
   } catch (err) {
     // Network failure — fail CLOSED
@@ -117,11 +162,17 @@ async function runOpenAIModeration(text: string): Promise<ModerationResult> {
   const primaryCategory = flaggedCategories[0] ?? "policy_violation";
   const label = OPENAI_CATEGORY_LABELS[primaryCategory] ?? primaryCategory;
 
-  return {
+  const moderationResult: ModerationResult = {
     approved: false,
     violationCategory: label,
     violationDetails: `Flagged by content policy: ${flaggedCategories.join(", ")}`,
   };
+
+  if (SELF_HARM_CATEGORIES.has(label)) {
+    moderationResult.crisisResources = buildCrisisResources();
+  }
+
+  return moderationResult;
 }
 
 // ---------------------------------------------------------------------------
@@ -154,10 +205,23 @@ const KEYWORD_TIERS: Array<{ category: string; patterns: RegExp[] }> = [
   },
 ];
 
+/**
+ * Strip zero-width and invisible Unicode characters (category Cf) and apply
+ * NFKC normalization to collapse homoglyphs. Without this, attackers can
+ * insert U+200B etc. between letters of banned terms to bypass keyword regex.
+ */
+function stripInvisibleChars(text: string): string {
+  return text
+    .replace(/[\u200B-\u200F\u2028-\u202F\u2060-\u2064\uFEFF\u00AD\u034F\u061C\u180E]/g, '')
+    .normalize('NFKC');
+}
+
 function runKeywordFilter(text: string): ModerationResult {
+  const sanitized = stripInvisibleChars(text);
+
   for (const tier of KEYWORD_TIERS) {
     for (const pattern of tier.patterns) {
-      if (pattern.test(text)) {
+      if (pattern.test(sanitized)) {
         if (tier.category === "csam") {
           // Fire CSAM handler asynchronously — don't block the rejection
           handleCsamDetection(text, "keyword_filter").catch((err) =>
@@ -207,22 +271,31 @@ async function handleCsamDetection(
  * Fail-CLOSED: if OPENAI_API_KEY is set and the API is unreachable,
  * throws ModerationUnavailableError. Callers must treat this as a rejection.
  *
- * If no API key is set, falls back to keyword filter (fail-OPEN on API,
- * fail-CLOSED on keywords).
+ * In production, OPENAI_API_KEY is required. Missing key throws
+ * ModerationUnavailableError immediately — no fallback is attempted.
+ *
+ * In development/test, missing key falls back to the keyword filter.
  */
 export async function moderateComment(
   text: string
 ): Promise<ModerationResult> {
   const apiKey = process.env.OPENAI_API_KEY;
+  const isProduction = process.env.NODE_ENV === "production";
+
+  if (!apiKey && isProduction) {
+    throw new ModerationUnavailableError(
+      "Content moderation service not configured"
+    );
+  }
 
   if (apiKey) {
     // Primary: OpenAI — throws on unavailability (fail CLOSED)
     return runOpenAIModeration(text);
   }
 
-  // Fallback: keyword filter
+  // Fallback: keyword filter — development/test only
   console.warn(
-    "[moderation] OPENAI_API_KEY not set — using keyword filter fallback"
+    "[moderation] OPENAI_API_KEY not set — using keyword filter fallback (dev/test only)"
   );
   return runKeywordFilter(text);
 }
