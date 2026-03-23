@@ -12,6 +12,7 @@ export interface Comment {
 
 interface CommentItemProps {
   comment: Comment;
+  tipBalance?: number;
   onReport?: (txid: string) => void;
 }
 
@@ -24,7 +25,31 @@ function stringToHue(str: string): number {
   return Math.abs(hash) % 360;
 }
 
-export function CommentItem({ comment, onReport }: CommentItemProps) {
+interface TipBadgeProps {
+  satoshis: number;
+}
+
+function TipBadge({ satoshis }: TipBadgeProps) {
+  if (satoshis <= 0) return null;
+  const display = satoshis >= 1000
+    ? `${(satoshis / 1000).toFixed(1)}k sats`
+    : `${satoshis} sats`;
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border border-amber-900/60 bg-amber-950/40 text-amber-500 font-sans font-medium tracking-wide"
+      style={{ fontSize: "10px" }}
+      title={`${satoshis.toLocaleString()} satoshis received`}
+    >
+      <svg width="8" height="8" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M8 4.5V11.5M5.5 7H8M8 9H10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+      {display}
+    </span>
+  );
+}
+
+export function CommentItem({ comment, tipBalance, onReport }: CommentItemProps) {
   const { txid, displayName, commentText, createdAt } = comment;
   const shortTxid = `${txid.slice(0, 6)}…${txid.slice(-6)}`;
   const timeAgo = formatDistanceToNowStrict(new Date(createdAt));
@@ -147,8 +172,9 @@ export function CommentItem({ comment, onReport }: CommentItemProps) {
           </svg>
         </a>
 
-        {/* Tip button (only shown when commenter provided a tip address) */}
+        {/* Tip button + balance badge */}
         <div className="flex items-center gap-2">
+          {tipBalance !== undefined && tipBalance > 0 && <TipBadge satoshis={tipBalance} />}
           {comment.tipAddress && <TipButton tipAddress={comment.tipAddress} />}
           <span
             className="text-neutral-800 font-mono hidden sm:inline"

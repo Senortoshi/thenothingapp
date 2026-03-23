@@ -18,6 +18,7 @@ export function CommentFeedClient({
   const [isPending, startTransition] = useTransition();
   const [hasMore, setHasMore] = useState(initialNextCursor !== null);
   const [loadError, setLoadError] = useState("");
+  const [tipBalances, setTipBalances] = useState<Record<string, number>>({});
 
   // Fetch fresh comments on mount — ensures the feed is always up to date
   // even if the server component passed stale or empty initialComments.
@@ -41,6 +42,25 @@ export function CommentFeedClient({
       })
       .catch(() => {}); // silent — SSR data is the fallback
   }, []);
+
+  // Fetch tip balances for comments that have a tipAddress
+  useEffect(() => {
+    const tippable = comments
+      .filter((c) => c.tipAddress)
+      .map((c) => c.tipAddress!)
+      .filter((addr, i, arr) => arr.indexOf(addr) === i); // dedupe
+
+    if (tippable.length === 0) return;
+
+    fetch(`/api/tips?addresses=${tippable.join(",")}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.balances) {
+          setTipBalances((prev) => ({ ...prev, ...data.balances }));
+        }
+      })
+      .catch(() => {}); // silent — tip display is best-effort
+  }, [comments]);
 
   const handleCommentPosted = useCallback((newComment: Comment) => {
     setComments((prev) => [newComment, ...prev]);
@@ -113,6 +133,7 @@ export function CommentFeedClient({
               <CommentItem
                 key={comment.txid}
                 comment={comment}
+                tipBalance={comment.tipAddress ? tipBalances[comment.tipAddress] : undefined}
               />
             ))}
           </div>
