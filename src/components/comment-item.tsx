@@ -1,7 +1,6 @@
 import { formatDistanceToNowStrict } from "@/lib/date-utils";
 
 export interface Comment {
-  id: number;
   txid: string;
   displayName: string;
   commentText: string;
@@ -11,6 +10,7 @@ export interface Comment {
 
 interface CommentItemProps {
   comment: Comment;
+  onReport?: (txid: string) => void;
 }
 
 /** Deterministic hue from a string — used for avatar color */
@@ -22,7 +22,7 @@ function stringToHue(str: string): number {
   return Math.abs(hash) % 360;
 }
 
-export function CommentItem({ comment }: CommentItemProps) {
+export function CommentItem({ comment, onReport }: CommentItemProps) {
   const { txid, displayName, commentText, createdAt } = comment;
   const shortTxid = `${txid.slice(0, 6)}…${txid.slice(-6)}`;
   const timeAgo = formatDistanceToNowStrict(new Date(createdAt));
@@ -54,14 +54,48 @@ export function CommentItem({ comment }: CommentItemProps) {
           </span>
         </div>
 
-        {/* Timestamp */}
-        <time
-          className="text-xs text-neutral-500 whitespace-nowrap flex-shrink-0 tabular-nums"
-          dateTime={createdAt}
-          title={new Date(createdAt).toLocaleString()}
-        >
-          {timeAgo}
-        </time>
+        {/* Timestamp + report button */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <time
+            className="text-xs text-neutral-500 whitespace-nowrap tabular-nums"
+            dateTime={createdAt}
+            title={new Date(createdAt).toLocaleString()}
+          >
+            {timeAgo}
+          </time>
+
+          {onReport && (
+            <button
+              type="button"
+              onClick={() => onReport(txid)}
+              aria-label={`Report comment by ${displayName}`}
+              className={[
+                "w-6 h-6 flex items-center justify-center rounded-md",
+                "text-neutral-600 hover:text-red-400",
+                "transition-colors duration-150",
+                "focus:outline-none focus:ring-2 focus:ring-red-500/50 focus:ring-offset-1 focus:ring-offset-neutral-950",
+                // Desktop: only show on group hover or keyboard focus. Mobile: always visible.
+                "opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100",
+              ].join(" ")}
+            >
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 14 14"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M2.5 1.5V12.5M2.5 1.5H10.5L8.5 5L10.5 8.5H2.5"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Comment text */}

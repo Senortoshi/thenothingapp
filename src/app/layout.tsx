@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
-import { ThemeToggle } from "@/components/theme-toggle";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -16,11 +15,11 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Nothing App — On-Chain Comments",
+  title: "BSVibes — On-Chain Comments",
   description:
     "Every comment is stored on BSV mainnet via OP_RETURN. Permanent, public, free to post.",
   openGraph: {
-    title: "Nothing App",
+    title: "BSVibes",
     description: "Post comments on-chain to BSV mainnet. Forever.",
     type: "website",
   },
@@ -32,15 +31,8 @@ export const metadata: Metadata = {
  */
 const themeScript = `
 (function() {
-  try {
-    var stored = localStorage.getItem('nothing-app:theme');
-    var prefersDark = !window.matchMedia('(prefers-color-scheme: light)').matches;
-    var theme = stored === 'light' ? 'light' : stored === 'dark' ? 'dark' : prefersDark ? 'dark' : 'light';
-    document.documentElement.classList.add(theme);
-    document.documentElement.style.backgroundColor = theme === 'dark' ? '#0a0a0a' : '#fafafa';
-  } catch (e) {
-    document.documentElement.classList.add('dark');
-  }
+  document.documentElement.classList.add('dark');
+  document.documentElement.style.backgroundColor = '#0a0a0a';
 })();
 `;
 
@@ -63,10 +55,10 @@ export default function RootLayout({
             <div className="flex items-center gap-2.5">
               <span
                 className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse flex-shrink-0"
-                aria-label="Live"
+                aria-hidden="true"
               />
               <span className="font-semibold text-sm tracking-tight text-neutral-100">
-                nothing
+                <span className="text-amber-400">BS</span>Vibes
               </span>
               <span className="hidden sm:inline text-xs text-neutral-700 font-[family-name:var(--font-mono)] border border-neutral-800 px-1.5 py-0.5 rounded-md">
                 mainnet
@@ -78,7 +70,6 @@ export default function RootLayout({
               <span className="text-xs text-neutral-700 font-[family-name:var(--font-mono)] hidden sm:inline">
                 BSV
               </span>
-              <ThemeToggle />
             </div>
           </div>
         </header>
@@ -90,13 +81,14 @@ export default function RootLayout({
 
         {/* Footer */}
         <footer className="max-w-2xl mx-auto px-4 sm:px-6 py-8 border-t border-neutral-800/60 mt-4">
-          <p className="text-xs text-neutral-700 text-center leading-relaxed">
-            Comments stored on-chain via OP_RETURN &middot; App pays all fees &middot;{" "}
+          <p className="text-xs text-neutral-700 text-center">
+            <span className="font-semibold text-neutral-600">BSVibes</span>
+            {" "}&middot;{" "}
             <a
-              href="/api/health"
+              href="/faq"
               className="hover:text-neutral-500 transition-colors underline underline-offset-2"
             >
-              pool status
+              FAQ
             </a>
           </p>
         </footer>

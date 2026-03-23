@@ -2,16 +2,16 @@
 
 import { useEffect, useRef, useCallback } from "react";
 
-const STORAGE_KEY = "nothing-app:permanence-ack";
+const STORAGE_KEY = "bsvibes:permanence-ack";
 
 export function getPermanenceAck(): boolean {
   if (typeof window === "undefined") return false;
-  return localStorage.getItem(STORAGE_KEY) === "true";
+  return sessionStorage.getItem(STORAGE_KEY) === "true";
 }
 
 export function setPermanenceAck(): void {
   if (typeof window === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, "true");
+  sessionStorage.setItem(STORAGE_KEY, "true");
 }
 
 interface PermanenceModalProps {
@@ -162,6 +162,11 @@ export function PermanenceModal({
               Do not include personal information you would not want permanently
               public (real name, address, phone number, etc.).
             </p>
+            <p className="text-xs text-neutral-500 italic">
+              Content may be hidden from this app&apos;s interface, but it
+              remains permanently accessible on the blockchain through block
+              explorers.
+            </p>
 
             <div className="pt-1 border-t border-neutral-800">
               <p className="text-xs text-neutral-500 mb-2">
@@ -192,7 +197,7 @@ export function PermanenceModal({
               ref={cancelBtnRef}
               type="button"
               onClick={onCancel}
-              className="flex-1 px-4 py-2.5 text-sm font-medium text-neutral-400 border border-neutral-700 rounded-lg hover:text-neutral-200 hover:border-neutral-600 transition-colors focus:outline-none focus:ring-2 focus:ring-neutral-600 focus:ring-offset-2 focus:ring-offset-neutral-900"
+              className="flex-1 px-4 py-2.5 text-sm font-semibold text-neutral-100 bg-neutral-800 border border-neutral-600 rounded-lg hover:bg-neutral-700 transition-colors focus:outline-none focus:ring-2 focus:ring-neutral-600 focus:ring-offset-2 focus:ring-offset-neutral-900"
             >
               Cancel
             </button>
@@ -200,7 +205,7 @@ export function PermanenceModal({
               ref={confirmBtnRef}
               type="button"
               onClick={onConfirm}
-              className="flex-1 px-4 py-2.5 text-sm font-semibold text-neutral-900 bg-neutral-100 rounded-lg hover:bg-white transition-colors focus:outline-none focus:ring-2 focus:ring-neutral-300 focus:ring-offset-2 focus:ring-offset-neutral-900"
+              className="flex-1 px-4 py-2.5 text-sm font-semibold text-amber-950 bg-amber-400 rounded-lg hover:bg-amber-300 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-neutral-900"
             >
               Post permanently
             </button>

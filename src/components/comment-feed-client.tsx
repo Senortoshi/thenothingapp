@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useCallback, useTransition } from "react";
+import { useState, useCallback, useTransition, useEffect } from "react";
 import { CommentItem, CommentItemSkeleton, type Comment } from "./comment-item";
 import { CommentForm } from "./comment-form";
 
 interface CommentFeedClientProps {
   initialComments: Comment[];
-  initialNextCursor: { createdAt: string; id: number } | null;
+  initialNextCursor: { offset: number } | null;
 }
 
 export function CommentFeedClient({
@@ -19,6 +19,29 @@ export function CommentFeedClient({
   const [hasMore, setHasMore] = useState(initialNextCursor !== null);
   const [loadError, setLoadError] = useState("");
 
+  // Fetch fresh comments on mount — ensures the feed is always up to date
+  // even if the server component passed stale or empty initialComments.
+  useEffect(() => {
+    fetch("/api/comments")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data?.comments?.length) return;
+        setComments((prev) => {
+          const existingTxids = new Set(prev.map((c) => c.txid));
+          const fresh = data.comments.filter((c: Comment) => !existingTxids.has(c.txid));
+          // If server gave us nothing but API has data, use API data
+          if (prev.length === 0) return data.comments;
+          // Otherwise merge in any new ones
+          return fresh.length > 0 ? [...fresh, ...prev] : prev;
+        });
+        if (data.nextCursor) {
+          setNextCursor(data.nextCursor);
+          setHasMore(true);
+        }
+      })
+      .catch(() => {}); // silent — SSR data is the fallback
+  }, []);
+
   const handleCommentPosted = useCallback((newComment: Comment) => {
     setComments((prev) => [newComment, ...prev]);
   }, []);
@@ -30,8 +53,7 @@ export function CommentFeedClient({
     startTransition(async () => {
       try {
         const params = new URLSearchParams({
-          cursorCreatedAt: nextCursor.createdAt,
-          cursorId: String(nextCursor.id),
+          cursorOffset: String(nextCursor.offset),
         });
 
         const res = await fetch(`/api/comments?${params.toString()}`);
@@ -40,7 +62,12 @@ export function CommentFeedClient({
         const data = await res.json();
         const newComments: Comment[] = data.comments ?? [];
 
-        setComments((prev) => [...prev, ...newComments]);
+        // Dedup by txid to prevent duplicates when optimistic posts appear in chain data
+        setComments((prev) => {
+          const existingTxids = new Set(prev.map((c) => c.txid));
+          const deduped = newComments.filter((c) => !existingTxids.has(c.txid));
+          return [...prev, ...deduped];
+        });
 
         if (data.nextCursor) {
           setNextCursor(data.nextCursor);
@@ -59,72 +86,77 @@ export function CommentFeedClient({
   const commentCount = comments.length;
 
   return (
-    <div className="space-y-6">
-      {/* Post form */}
-      <CommentForm onCommentPosted={handleCommentPosted} />
+    <>
+      <div className="space-y-6">
+        {/* Post form */}
+        <CommentForm onCommentPosted={handleCommentPosted} />
 
-      {/* Feed header */}
-      <div className="flex items-center justify-between pt-2">
-        <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-widest">
-          {commentCount === 0
-            ? "No messages yet"
-            : `${commentCount} message${commentCount === 1 ? "" : "s"}`}
-        </h2>
-        <div className="flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/70" aria-hidden="true" />
-          <span className="text-xs text-neutral-600 font-mono">BSV mainnet</span>
+        {/* Feed header */}
+        <div className="flex items-center justify-between pt-2">
+          <h2 className="text-xs font-medium text-neutral-500 uppercase tracking-widest">
+            {commentCount === 0
+              ? "No messages yet"
+              : `${commentCount} message${commentCount === 1 ? "" : "s"}`}
+          </h2>
+          <div className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/70" aria-hidden="true" />
+            <span className="text-xs text-neutral-600 font-mono">BSV mainnet</span>
+          </div>
         </div>
-      </div>
 
-      {/* Comment list */}
-      {commentCount === 0 ? (
-        <EmptyState />
-      ) : (
-        <div className="space-y-2.5">
-          {comments.map((comment) => (
-            <CommentItem key={comment.txid} comment={comment} />
-          ))}
-        </div>
-      )}
+        {/* Comment list */}
+        {commentCount === 0 ? (
+          <EmptyState />
+        ) : (
+          <div className="space-y-2.5">
+            {comments.map((comment) => (
+              <CommentItem
+                key={comment.txid}
+                comment={comment}
+              />
+            ))}
+          </div>
+        )}
 
-      {/* Load more skeletons while pending */}
-      {isPending && (
-        <div className="space-y-2.5" aria-label="Loading more comments">
-          <CommentItemSkeleton />
-          <CommentItemSkeleton />
-          <CommentItemSkeleton />
-        </div>
-      )}
+        {/* Load more skeletons while pending */}
+        {isPending && (
+          <div className="space-y-2.5" aria-label="Loading more comments">
+            <CommentItemSkeleton />
+            <CommentItemSkeleton />
+            <CommentItemSkeleton />
+          </div>
+        )}
 
-      {/* Load error */}
-      {loadError && (
-        <p className="text-sm text-red-400 text-center py-2" role="alert">
-          {loadError}
-        </p>
-      )}
-
-      {/* Load more button */}
-      {hasMore && !isPending && (
-        <button
-          onClick={loadMore}
-          disabled={isPending}
-          className="w-full border border-neutral-800 rounded-xl py-3 text-sm text-neutral-500 hover:text-neutral-300 hover:border-neutral-700 hover:bg-neutral-900/40 active:scale-[0.99] transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium min-h-[44px]"
-        >
-          Load more
-        </button>
-      )}
-
-      {/* End of feed */}
-      {!hasMore && commentCount > 0 && (
-        <div className="flex items-center gap-3 py-2">
-          <div className="flex-1 h-px bg-neutral-800/60" />
-          <p className="text-xs text-neutral-700 font-mono whitespace-nowrap">
-            all messages loaded
+        {/* Load error */}
+        {loadError && (
+          <p className="text-sm text-red-400 text-center py-2" role="alert">
+            {loadError}
           </p>
-          <div className="flex-1 h-px bg-neutral-800/60" />
-        </div>
-      )}
-    </div>
+        )}
+
+        {/* Load more button */}
+        {hasMore && !isPending && (
+          <button
+            onClick={loadMore}
+            disabled={isPending}
+            className="w-full border border-neutral-800 rounded-xl py-3 text-sm text-neutral-500 hover:text-neutral-300 hover:border-neutral-700 hover:bg-neutral-900/40 active:scale-[0.99] transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium min-h-[44px]"
+          >
+            Load more
+          </button>
+        )}
+
+        {/* End of feed */}
+        {!hasMore && commentCount > 0 && (
+          <div className="flex items-center gap-3 py-2">
+            <div className="flex-1 h-px bg-neutral-800/60" />
+            <p className="text-xs text-neutral-700 font-mono whitespace-nowrap">
+              all messages loaded
+            </p>
+            <div className="flex-1 h-px bg-neutral-800/60" />
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
