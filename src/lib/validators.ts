@@ -24,8 +24,7 @@ export type PostCommentInput = z.infer<typeof postCommentSchema>;
 
 // GET /api/comments — query string cursor
 export const getCommentsSchema = z.object({
-  cursorCreatedAt: z.string().datetime({ offset: true }).optional(),
-  cursorId: z.coerce.number().int().positive().optional(),
+  cursorOffset: z.coerce.number().int().min(0).optional(),
   pageSize: z.coerce
     .number()
     .int()

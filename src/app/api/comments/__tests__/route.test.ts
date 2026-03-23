@@ -1,21 +1,11 @@
 /**
- * IRI-3 & IRI-5: Integration Tests — POST /api/comments + GET /api/comments
+ * Tests — POST /api/comments + GET /api/comments
  *
- * Tests the Next.js route handlers directly by calling GET() and POST()
- * with mock NextRequest objects. All services and DB calls are mocked.
- *
- * Rate limiting is tested by mocking the Upstash modules.
+ * Tests the Next.js route handlers. All services are mocked.
+ * Updated for the on-chain architecture (no Postgres).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-
-// ---------------------------------------------------------------------------
-// Hoisted variables — referenced inside vi.mock factories below
-// ---------------------------------------------------------------------------
-
-const { mockDbExecute } = vi.hoisted(() => ({
-  mockDbExecute: vi.fn(),
-}));
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -26,6 +16,7 @@ vi.mock("@/services/comment-write.service", () => ({
   ServiceError: class ServiceError extends Error {
     code: string;
     statusCode: number;
+    crisisResources?: unknown;
     constructor(code: string, message: string, statusCode = 500) {
       super(message);
       this.code = code;
@@ -35,8 +26,9 @@ vi.mock("@/services/comment-write.service", () => ({
   },
 }));
 
-vi.mock("@/db", () => ({
-  db: { execute: mockDbExecute },
+vi.mock("@/services/comment-read.service", () => ({
+  getComments: vi.fn(),
+  invalidateFeedCache: vi.fn(),
 }));
 
 vi.mock("@upstash/ratelimit", () => ({
@@ -53,15 +45,22 @@ vi.mock("@upstash/redis", () => ({
   },
 }));
 
+vi.mock("@/lib/rate-limiter", () => ({
+  checkRateLimit: vi.fn().mockResolvedValue({ allowed: true, headers: {} }),
+  recordBroadcastSuccess: vi.fn().mockResolvedValue(undefined),
+  recordBroadcastFailure: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ---------------------------------------------------------------------------
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
 
 import { POST, GET } from "@/app/api/comments/route";
 import { writeComment, ServiceError } from "@/services/comment-write.service";
+import { getComments } from "@/services/comment-read.service";
 
 // ---------------------------------------------------------------------------
-// Test helper — create a minimal NextRequest-like object
+// Test helper
 // ---------------------------------------------------------------------------
 
 function makeRequest(
@@ -89,11 +88,6 @@ function makeRequest(
   } as unknown as import("next/server").NextRequest;
 }
 
-// Default mock DB response for GET (empty feed)
-function setMockComments(rows: unknown[]) {
-  mockDbExecute.mockResolvedValueOnce(rows);
-}
-
 // ---------------------------------------------------------------------------
 // GET /api/comments
 // ---------------------------------------------------------------------------
@@ -102,7 +96,7 @@ describe("GET /api/comments", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("returns 200 with empty comments array when feed is empty", async () => {
-    setMockComments([]);
+    vi.mocked(getComments).mockResolvedValue({ comments: [], nextCursor: null });
     const req = makeRequest("GET");
     const res = await GET(req);
     const json = await res.json();
@@ -111,82 +105,73 @@ describe("GET /api/comments", () => {
     expect(json.nextCursor).toBeNull();
   });
 
-  it("returns serialised comment rows", async () => {
-    const now = new Date("2024-06-01T12:00:00.000Z");
-    setMockComments([
-      {
-        id: 1,
-        txid: "a".repeat(64),
-        display_name: "Alice",
-        comment_text: "Hello",
-        parent_txid: null,
-        created_at: now,
-      },
-    ]);
+  it("returns comment data from the read service", async () => {
+    vi.mocked(getComments).mockResolvedValue({
+      comments: [
+        {
+          txid: "a".repeat(64),
+          displayName: "Alice",
+          commentText: "Hello",
+          parentTxid: null,
+          createdAt: "2024-06-01T12:00:00.000Z",
+        },
+      ],
+      nextCursor: null,
+    });
     const req = makeRequest("GET");
     const res = await GET(req);
     const json = await res.json();
     expect(json.comments).toHaveLength(1);
     expect(json.comments[0]).toMatchObject({
-      id: 1,
       txid: "a".repeat(64),
       displayName: "Alice",
       commentText: "Hello",
-      parentTxid: null,
-      createdAt: now.toISOString(),
     });
   });
 
-  it("sets nextCursor when exactly pageSize comments are returned", async () => {
-    const rows = Array.from({ length: 20 }, (_, i) => ({
-      id: i + 1,
-      txid: String(i).padStart(64, "0"),
-      display_name: "User",
-      comment_text: "msg",
-      parent_txid: null,
-      created_at: new Date("2024-01-01T00:00:00.000Z"),
-    }));
-    setMockComments(rows);
+  it("returns nextCursor with offset when more comments exist", async () => {
+    vi.mocked(getComments).mockResolvedValue({
+      comments: Array.from({ length: 20 }, (_, i) => ({
+        txid: String(i).padStart(64, "0"),
+        displayName: "User",
+        commentText: "msg",
+        parentTxid: null,
+        createdAt: "2024-01-01T00:00:00.000Z",
+      })),
+      nextCursor: { offset: 20 },
+    });
     const req = makeRequest("GET");
     const res = await GET(req);
     const json = await res.json();
-    expect(json.nextCursor).not.toBeNull();
-    expect(json.nextCursor).toHaveProperty("id");
-    expect(json.nextCursor).toHaveProperty("createdAt");
+    expect(json.nextCursor).toEqual({ offset: 20 });
   });
 
-  it("returns null nextCursor when fewer than pageSize comments returned", async () => {
-    setMockComments([
-      {
-        id: 1,
-        txid: "a".repeat(64),
-        display_name: "Alice",
-        comment_text: "Only one",
-        parent_txid: null,
-        created_at: new Date(),
-      },
-    ]);
+  it("returns null nextCursor when no more comments", async () => {
+    vi.mocked(getComments).mockResolvedValue({
+      comments: [{ txid: "a".repeat(64), displayName: "Alice", commentText: "Only one", parentTxid: null, createdAt: new Date().toISOString() }],
+      nextCursor: null,
+    });
     const req = makeRequest("GET");
     const res = await GET(req);
     const json = await res.json();
     expect(json.nextCursor).toBeNull();
   });
 
-  it("returns 400 for invalid query params (bad cursorCreatedAt)", async () => {
-    const req = makeRequest("GET", { searchParams: { cursorCreatedAt: "not-a-date" } });
+  it("returns 400 for invalid query params (negative offset)", async () => {
+    const req = makeRequest("GET", { searchParams: { cursorOffset: "-1" } });
     const res = await GET(req);
     expect(res.status).toBe(400);
   });
 
   it("sets Cache-Control header on successful response", async () => {
-    setMockComments([]);
+    vi.mocked(getComments).mockResolvedValue({ comments: [], nextCursor: null });
     const req = makeRequest("GET");
     const res = await GET(req);
     expect(res.headers.get("Cache-Control")).toContain("s-maxage=5");
   });
 
-  it("returns 500 when DB throws", async () => {
-    mockDbExecute.mockRejectedValueOnce(new Error("DB connection lost"));
+  it("returns 500 when read service throws", async () => {
+    vi.mocked(getComments).mockRejectedValue(new Error("WoC unreachable"));
     const req = makeRequest("GET");
     const res = await GET(req);
     expect(res.status).toBe(500);
@@ -263,9 +248,7 @@ describe("POST /api/comments — success", () => {
   });
 
   it("returns 201 on a valid submission", async () => {
-    const req = makeRequest("POST", {
-      body: { commentText: "Hello" },
-    });
+    const req = makeRequest("POST", { body: { commentText: "Hello" } });
     const res = await POST(req);
     expect(res.status).toBe(201);
   });
@@ -280,7 +263,7 @@ describe("POST /api/comments — success", () => {
     expect(json.createdAt).toBe(MOCK_RESULT.createdAt.toISOString());
   });
 
-  it("returns parentTxid as null in response when not supplied", async () => {
+  it("returns parentTxid as null when not supplied", async () => {
     const req = makeRequest("POST", { body: { commentText: "Hello" } });
     const res = await POST(req);
     const json = await res.json();
@@ -329,15 +312,6 @@ describe("POST /api/comments — service errors", () => {
     expect(res.status).toBe(503);
   });
 
-  it("returns 503 when writeComment throws MODERATION_UNAVAILABLE", async () => {
-    vi.mocked(writeComment).mockRejectedValueOnce(
-      new ServiceError("MODERATION_UNAVAILABLE", "Moderation service down", 503)
-    );
-    const req = makeRequest("POST", { body: { commentText: "hello" } });
-    const res = await POST(req);
-    expect(res.status).toBe(503);
-  });
-
   it("returns 500 for unexpected errors from writeComment", async () => {
     vi.mocked(writeComment).mockRejectedValueOnce(new Error("Unexpected crash"));
     const req = makeRequest("POST", { body: { commentText: "hello" } });
@@ -347,14 +321,45 @@ describe("POST /api/comments — service errors", () => {
 });
 
 // ---------------------------------------------------------------------------
-// IRI-5: Rate Limiting
-//
-// The actual Upstash limiter is mocked. We test the route's handling of
-// rlResult values injected via the mock — the rate-limit decision logic
-// in the route itself, not the Upstash library.
-//
-// For true per-IP enforcement tests, see the infrastructure test plan in
-// src/app/api/comments/__tests__/rate-limiting.plan.md
+// POST /api/comments — crisis resources
+// ---------------------------------------------------------------------------
+
+const MOCK_CRISIS_RESOURCES = {
+  message: "If you or someone you know is struggling, help is available.",
+  resources: [
+    { name: "988 Suicide & Crisis Lifeline", contact: "Call or text 988", url: "https://988lifeline.org" },
+    { name: "Crisis Text Line", contact: "Text HOME to 741741", url: "https://www.crisistextline.org" },
+  ],
+};
+
+describe("POST /api/comments — self-harm crisis resources", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns crisisResources when ServiceError carries them", async () => {
+    const err = new ServiceError("CONTENT_VIOLATION:self_harm", "Content violates policy", 400);
+    (err as ServiceError & { crisisResources: unknown }).crisisResources = MOCK_CRISIS_RESOURCES;
+    vi.mocked(writeComment).mockRejectedValueOnce(err);
+
+    const req = makeRequest("POST", { body: { commentText: "self harm content" } });
+    const res = await POST(req);
+    const json = await res.json();
+    expect(res.status).toBe(400);
+    expect(json.crisisResources).toEqual(MOCK_CRISIS_RESOURCES);
+  });
+
+  it("does NOT include crisisResources for non-self-harm violations", async () => {
+    vi.mocked(writeComment).mockRejectedValueOnce(
+      new ServiceError("CONTENT_VIOLATION:hate_speech", "Content violates policy", 400)
+    );
+    const req = makeRequest("POST", { body: { commentText: "hate speech" } });
+    const res = await POST(req);
+    const json = await res.json();
+    expect(json.crisisResources).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/comments — rate limit headers
 // ---------------------------------------------------------------------------
 
 describe("POST /api/comments — rate limit headers on success", () => {
@@ -369,14 +374,12 @@ describe("POST /api/comments — rate limit headers on success", () => {
   });
 
   it("does not include rate limit headers when Redis is unconfigured", async () => {
-    // Without UPSTASH_REDIS_REST_URL/TOKEN, rlResult is null
     delete process.env.UPSTASH_REDIS_REST_URL;
     delete process.env.UPSTASH_REDIS_REST_TOKEN;
 
     const req = makeRequest("POST", { body: { commentText: "hello" } });
     const res = await POST(req);
     expect(res.status).toBe(201);
-    // No rate limit headers expected
     expect(res.headers.get("X-RateLimit-Limit")).toBeNull();
   });
 });

@@ -237,36 +237,27 @@ describe("getCommentsSchema", () => {
     expect(getCommentsSchema.safeParse({ pageSize: 3.5 }).success).toBe(false);
   });
 
-  it("accepts a valid ISO 8601 cursorCreatedAt", () => {
-    const result = getCommentsSchema.safeParse({
-      cursorCreatedAt: "2024-01-15T10:30:00.000Z",
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects an invalid date string as cursorCreatedAt", () => {
-    expect(
-      getCommentsSchema.safeParse({ cursorCreatedAt: "not-a-date" }).success
-    ).toBe(false);
-  });
-
-  it("accepts a positive integer cursorId", () => {
-    expect(getCommentsSchema.safeParse({ cursorId: 42 }).success).toBe(true);
-  });
-
-  it("rejects cursorId=0 (must be positive)", () => {
-    expect(getCommentsSchema.safeParse({ cursorId: 0 }).success).toBe(false);
-  });
-
-  it("rejects a negative cursorId", () => {
-    expect(getCommentsSchema.safeParse({ cursorId: -1 }).success).toBe(false);
-  });
-
-  it("coerces string cursorId to number", () => {
-    const result = getCommentsSchema.safeParse({ cursorId: "99" });
+  it("accepts a valid cursorOffset", () => {
+    const result = getCommentsSchema.safeParse({ cursorOffset: 20 });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.cursorId).toBe(99);
+      expect(result.data.cursorOffset).toBe(20);
+    }
+  });
+
+  it("accepts cursorOffset=0", () => {
+    expect(getCommentsSchema.safeParse({ cursorOffset: 0 }).success).toBe(true);
+  });
+
+  it("rejects a negative cursorOffset", () => {
+    expect(getCommentsSchema.safeParse({ cursorOffset: -1 }).success).toBe(false);
+  });
+
+  it("coerces string cursorOffset to number", () => {
+    const result = getCommentsSchema.safeParse({ cursorOffset: "40" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.cursorOffset).toBe(40);
     }
   });
 });

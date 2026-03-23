@@ -82,8 +82,8 @@ export interface ParsedComment {
 }
 
 /**
- * Parses a raw transaction hex and extracts NothingApp comment fields.
- * Returns null if the transaction is not a valid NothingApp comment.
+ * Parses a raw transaction hex and extracts BSVibes comment fields.
+ * Returns null if the transaction is not a valid BSVibes comment.
  *
  * Expected OP_RETURN format (each field is a separate pushdata):
  *   OP_FALSE OP_RETURN <APP_PREFIX> <VERSION> <ACTION> <comment_text> <display_name> <timestamp> [<parent_txid>]

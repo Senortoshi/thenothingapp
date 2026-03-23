@@ -20,17 +20,65 @@ export interface BuildTxResult {
   txid: string;
   fee: number;
   changeAmount: number;
+  changeScriptHex: string;
 }
+
+// Minimum entropy threshold: reject keys whose numeric value is below this.
+// Any key < 2^128 is dangerously weak (brute-forceable) and likely a mistake.
+const MIN_KEY_HEX = "00000000000000000000000000000001" + "0".repeat(32); // 2^128
+
+/**
+ * Returns true if a PrivateKey has dangerously low entropy (e.g., small integers,
+ * all-zeros, or any value below 2^128). These keys are publicly known or trivially
+ * brute-forceable and MUST NOT be used for real funds.
+ */
+function isWeakKey(key: PrivateKey): boolean {
+  const hex = key.toHex();
+  // Reject all-zeros (the "new PrivateKey()" default)
+  if (hex === "0".repeat(64)) return true;
+  // Reject anything below 2^128 — impossibly low for a random 256-bit key
+  if (hex < MIN_KEY_HEX) return true;
+  return false;
+}
+
+// Module-level cache — avoids re-parsing WIF on every request within a serverless invocation
+let _cachedKey: PrivateKey | null = null;
+let _cachedWif: string | null = null;
 
 /**
  * Returns the PrivateKey loaded from BSV_FUNDING_KEY env var (WIF format).
+ * Cached per invocation to avoid redundant base58 decoding.
+ * Invalidates cache if the env var changes (e.g., in tests).
+ * Error messages are sanitized to prevent WIF leaking into logs/stack traces.
+ *
+ * SECURITY: Rejects keys with dangerously low entropy (small integers, zero, etc.)
+ * to prevent funds from being sent to publicly-known addresses.
  */
 export function getFundingKey(): PrivateKey {
   const wif = process.env.BSV_FUNDING_KEY;
   if (!wif) {
+    _cachedKey = null;
+    _cachedWif = null;
     throw new Error("BSV_FUNDING_KEY environment variable is not set");
   }
-  return PrivateKey.fromWif(wif);
+  if (_cachedKey && _cachedWif === wif) return _cachedKey;
+  try {
+    const key = PrivateKey.fromWif(wif);
+    if (isWeakKey(key)) {
+      throw new Error(
+        "CRITICAL: BSV_FUNDING_KEY is a weak/known private key (value too small). " +
+        "Generate a new key with: PrivateKey.fromRandom().toWif()"
+      );
+    }
+    _cachedKey = key;
+    _cachedWif = wif;
+    return _cachedKey;
+  } catch (e) {
+    _cachedKey = null;
+    _cachedWif = null;
+    if (e instanceof Error && e.message.startsWith("CRITICAL:")) throw e;
+    throw new Error("BSV_FUNDING_KEY is invalid (WIF parse failed)");
+  }
 }
 
 /**
@@ -139,5 +187,5 @@ export async function buildCommentTransaction(params: {
   const txHex = tx.toHex();
   const txid = tx.id("hex");
 
-  return { txHex, txid, fee, changeAmount };
+  return { txHex, txid, fee, changeAmount, changeScriptHex: changeLockingScript.toHex() };
 }

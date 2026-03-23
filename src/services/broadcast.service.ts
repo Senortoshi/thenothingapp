@@ -1,4 +1,5 @@
 import { ARC_URL, GORILLAPOOL_ARC_URL } from "@/lib/constants";
+import { recordBroadcastSuccess, recordBroadcastFailure } from "@/lib/rate-limiter";
 
 export interface ArcResponse {
   txid: string;
@@ -21,6 +22,7 @@ async function broadcastToArc(
       Accept: "application/json",
     },
     body: JSON.stringify({ rawTx: txHex }),
+    signal: AbortSignal.timeout(10_000), // 10s timeout — budget: moderation(5s) + ARC1(10s) + ARC2(10s) = 25s < 30s maxDuration
   });
 
   let body: Record<string, unknown>;
@@ -65,7 +67,9 @@ function isRetriableError(err: unknown): boolean {
   const status = (err as Error & { status?: number }).status;
   // No status means network-level failure (fetch threw) — retriable
   if (status === undefined) return true;
-  // 5xx = server error — retriable; 4xx = client/tx rejection — not retriable
+  // 401/403 = auth/config error on this endpoint, not a tx rejection — retriable on another endpoint
+  if (status === 401 || status === 403) return true;
+  // 5xx = server error — retriable; other 4xx = tx-level rejection — not retriable
   return status >= 500;
 }
 
@@ -79,7 +83,10 @@ function isRetriableError(err: unknown): boolean {
  */
 export async function broadcastTransaction(txHex: string): Promise<ArcResponse> {
   try {
-    return await broadcastToArc(ARC_URL, txHex);
+    const result = await broadcastToArc(ARC_URL, txHex);
+    // Successful broadcast — reset circuit breaker failure counter
+    await recordBroadcastSuccess().catch(() => {});
+    return result;
   } catch (taalError) {
     // 4xx = tx-level rejection — do not retry on another endpoint
     if (!isRetriableError(taalError)) {
@@ -91,7 +98,15 @@ export async function broadcastTransaction(txHex: string): Promise<ArcResponse> 
       taalError instanceof Error ? taalError.message : String(taalError)
     );
 
-    // Fallback to GorillaPool — let errors propagate naturally
-    return await broadcastToArc(GORILLAPOOL_ARC_URL, txHex);
+    try {
+      // Fallback to GorillaPool
+      const result = await broadcastToArc(GORILLAPOOL_ARC_URL, txHex);
+      await recordBroadcastSuccess().catch(() => {});
+      return result;
+    } catch (gpError) {
+      // Both endpoints failed — record as broadcast failure for circuit breaker
+      await recordBroadcastFailure().catch(() => {});
+      throw gpError;
+    }
   }
 }

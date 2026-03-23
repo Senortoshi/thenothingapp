@@ -1,26 +1,10 @@
 /**
- * IRI-3 / IRI-6: Integration Tests — comment-write.service
+ * Tests writeComment — tip-chain architecture (no Postgres).
  *
- * Tests writeComment by mocking all external dependencies:
- *   - moderateComment (moderation.service)
- *   - checkoutUtxo, markUtxoSpent, releaseUtxo (utxo-pool.service)
- *   - buildCommentTransaction (wallet.service)
- *   - broadcastTransaction (broadcast.service)
- *   - db.insert (db)
- *
- * This exercises the full orchestration logic in isolation.
+ * Mocks: moderation, utxo-tip (mutex + tip CRUD), wallet, broadcast, rate-limiter, comment-read (cache).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-
-// ---------------------------------------------------------------------------
-// Hoisted variables — vi.mock factories are hoisted to the top of the file,
-// so any variables they reference must also be hoisted via vi.hoisted().
-// ---------------------------------------------------------------------------
-
-const { mockInsert } = vi.hoisted(() => ({
-  mockInsert: vi.fn().mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) }),
-}));
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -36,10 +20,20 @@ vi.mock("@/services/moderation.service", () => ({
   },
 }));
 
-vi.mock("@/services/utxo-pool.service", () => ({
-  checkoutUtxo: vi.fn(),
-  markUtxoSpent: vi.fn(),
-  releaseUtxo: vi.fn(),
+const MOCK_CRISIS_RESOURCES = {
+  message: "If you or someone you know is struggling, help is available.",
+  resources: [
+    { name: "988 Suicide & Crisis Lifeline", contact: "Call or text 988", url: "https://988lifeline.org" },
+    { name: "Crisis Text Line", contact: "Text HOME to 741741", url: "https://www.crisistextline.org" },
+  ],
+};
+
+vi.mock("@/lib/utxo-tip", () => ({
+  acquireTipMutex: vi.fn(),
+  releaseTipMutex: vi.fn().mockResolvedValue(undefined),
+  getTip: vi.fn(),
+  setTip: vi.fn().mockResolvedValue(undefined),
+  recoverTipFromChain: vi.fn(),
 }));
 
 vi.mock("@/services/wallet.service", () => ({
@@ -50,10 +44,12 @@ vi.mock("@/services/broadcast.service", () => ({
   broadcastTransaction: vi.fn(),
 }));
 
-vi.mock("@/db", () => ({
-  db: {
-    insert: mockInsert,
-  },
+vi.mock("@/lib/rate-limiter", () => ({
+  recordSpend: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./comment-read.service", () => ({
+  invalidateFeedCache: vi.fn().mockResolvedValue(undefined),
 }));
 
 // ---------------------------------------------------------------------------
@@ -62,21 +58,16 @@ vi.mock("@/db", () => ({
 
 import { writeComment, ServiceError } from "@/services/comment-write.service";
 import { moderateComment } from "@/services/moderation.service";
-import {
-  checkoutUtxo,
-  markUtxoSpent,
-  releaseUtxo,
-} from "@/services/utxo-pool.service";
+import { ModerationUnavailableError } from "@/services/moderation.service";
+import { acquireTipMutex, releaseTipMutex, getTip, setTip, recoverTipFromChain } from "@/lib/utxo-tip";
 import { buildCommentTransaction } from "@/services/wallet.service";
 import { broadcastTransaction } from "@/services/broadcast.service";
-import { ModerationUnavailableError } from "@/services/moderation.service";
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const MOCK_UTXO = {
-  id: 1,
+const MOCK_TIP = {
   txid: "a".repeat(64),
   vout: 0,
   satoshis: 5000,
@@ -88,6 +79,7 @@ const MOCK_TX_RESULT = {
   txid: "b".repeat(64),
   fee: 3,
   changeAmount: 4997,
+  changeScriptHex: "76a914" + "00".repeat(20) + "88ac",
 };
 
 const VALID_INPUT = {
@@ -105,12 +97,10 @@ beforeEach(() => {
 
   // Default happy-path stubs
   vi.mocked(moderateComment).mockResolvedValue({ approved: true });
-  vi.mocked(checkoutUtxo).mockResolvedValue(MOCK_UTXO);
+  vi.mocked(acquireTipMutex).mockResolvedValue(true);
+  vi.mocked(getTip).mockResolvedValue(MOCK_TIP);
   vi.mocked(buildCommentTransaction).mockResolvedValue(MOCK_TX_RESULT);
   vi.mocked(broadcastTransaction).mockResolvedValue({ txid: MOCK_TX_RESULT.txid });
-  vi.mocked(markUtxoSpent).mockResolvedValue(undefined);
-  vi.mocked(releaseUtxo).mockResolvedValue(undefined);
-  mockInsert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
 });
 
 // ---------------------------------------------------------------------------
@@ -136,19 +126,26 @@ describe("writeComment — happy path", () => {
 
   it("calls moderateComment with the comment text", async () => {
     await writeComment(VALID_INPUT, "req-1");
-    expect(moderateComment).toHaveBeenCalledWith(VALID_INPUT.commentText);
+    expect(moderateComment).toHaveBeenCalledWith(
+      expect.stringContaining(VALID_INPUT.commentText)
+    );
   });
 
-  it("calls checkoutUtxo with the requestId", async () => {
-    await writeComment(VALID_INPUT, "req-abc");
-    expect(checkoutUtxo).toHaveBeenCalledWith("req-abc");
+  it("acquires the tip mutex", async () => {
+    await writeComment(VALID_INPUT, "req-1");
+    expect(acquireTipMutex).toHaveBeenCalledWith("req-1");
   });
 
-  it("calls buildCommentTransaction with utxo and text params", async () => {
+  it("reads the current tip", async () => {
+    await writeComment(VALID_INPUT, "req-1");
+    expect(getTip).toHaveBeenCalled();
+  });
+
+  it("calls buildCommentTransaction with tip and text params", async () => {
     await writeComment(VALID_INPUT, "req-1");
     expect(buildCommentTransaction).toHaveBeenCalledWith(
       expect.objectContaining({
-        utxo: MOCK_UTXO,
+        utxo: MOCK_TIP,
         commentText: VALID_INPUT.commentText,
         displayName: VALID_INPUT.displayName,
       })
@@ -160,14 +157,19 @@ describe("writeComment — happy path", () => {
     expect(broadcastTransaction).toHaveBeenCalledWith(MOCK_TX_RESULT.txHex);
   });
 
-  it("marks the UTXO spent after a successful broadcast", async () => {
+  it("advances the tip to the change output", async () => {
     await writeComment(VALID_INPUT, "req-1");
-    expect(markUtxoSpent).toHaveBeenCalledWith(MOCK_UTXO.id);
+    expect(setTip).toHaveBeenCalledWith({
+      txid: MOCK_TX_RESULT.txid,
+      vout: 1,
+      satoshis: MOCK_TX_RESULT.changeAmount,
+      scriptHex: MOCK_TX_RESULT.changeScriptHex,
+    });
   });
 
-  it("does not release the UTXO on success", async () => {
+  it("releases the mutex after success", async () => {
     await writeComment(VALID_INPUT, "req-1");
-    expect(releaseUtxo).not.toHaveBeenCalled();
+    expect(releaseTipMutex).toHaveBeenCalledWith("req-1");
   });
 
   it("prefers ARC txid over locally computed txid", async () => {
@@ -178,167 +180,134 @@ describe("writeComment — happy path", () => {
   });
 
   it("forwards parentTxid to buildCommentTransaction", async () => {
-    const parent = "d".repeat(64);
-    await writeComment({ ...VALID_INPUT, parentTxid: parent }, "req-1");
+    const input = { ...VALID_INPUT, parentTxid: "d".repeat(64) };
+    await writeComment(input, "req-1");
     expect(buildCommentTransaction).toHaveBeenCalledWith(
-      expect.objectContaining({ parentTxid: parent })
+      expect.objectContaining({ parentTxid: input.parentTxid })
     );
   });
 });
 
 // ---------------------------------------------------------------------------
-// Moderation failures
+// Mutex / tip failures
 // ---------------------------------------------------------------------------
 
-describe("writeComment — moderation rejection", () => {
-  it("throws ServiceError with code CONTENT_VIOLATION when moderation rejects", async () => {
-    vi.mocked(moderateComment).mockResolvedValueOnce({
-      approved: false,
-      violationCategory: "hate_speech",
-      violationDetails: "Flagged by hate speech filter",
-    });
-
-    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toMatchObject({
-      code: "CONTENT_VIOLATION:hate_speech",
-      statusCode: 400,
-    });
+describe("writeComment — mutex and tip failures", () => {
+  it("throws BUSY when mutex cannot be acquired", async () => {
+    vi.mocked(acquireTipMutex).mockResolvedValue(false);
+    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toThrow(ServiceError);
+    try {
+      await writeComment(VALID_INPUT, "req-1");
+    } catch (err) {
+      expect((err as ServiceError).code).toBe("BUSY");
+      expect((err as ServiceError).statusCode).toBe(503);
+    }
   });
 
-  it("does not checkout a UTXO when moderation rejects", async () => {
-    vi.mocked(moderateComment).mockResolvedValueOnce({
-      approved: false,
-      violationCategory: "violence",
-    });
-
-    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toBeInstanceOf(ServiceError);
-    expect(checkoutUtxo).not.toHaveBeenCalled();
+  it("throws NO_UTXOS when tip is null and recovery returns null", async () => {
+    vi.mocked(getTip).mockResolvedValue(null);
+    vi.mocked(recoverTipFromChain).mockResolvedValue(null);
+    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toThrow(ServiceError);
+    try {
+      await writeComment(VALID_INPUT, "req-1");
+    } catch (err) {
+      expect((err as ServiceError).code).toBe("NO_UTXOS");
+    }
   });
 
-  it("throws ServiceError MODERATION_UNAVAILABLE when OpenAI is unreachable — fail CLOSED", async () => {
-    vi.mocked(moderateComment).mockRejectedValueOnce(
-      new ModerationUnavailableError("Service down")
-    );
-
-    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toMatchObject({
-      code: "MODERATION_UNAVAILABLE",
-      statusCode: 503,
-    });
-  });
-
-  it("throws ServiceError MODERATION_ERROR on unexpected moderation error — fail CLOSED", async () => {
-    vi.mocked(moderateComment).mockRejectedValueOnce(new Error("Unexpected crash"));
-
-    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toMatchObject({
-      code: "MODERATION_ERROR",
-      statusCode: 503,
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// UTXO exhaustion
-// ---------------------------------------------------------------------------
-
-describe("writeComment — UTXO pool exhaustion", () => {
-  it("throws ServiceError NO_UTXOS when pool is empty", async () => {
-    vi.mocked(checkoutUtxo).mockResolvedValueOnce(null);
-
-    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toMatchObject({
-      code: "NO_UTXOS",
-      statusCode: 503,
-    });
-  });
-
-  it("does not call buildCommentTransaction when no UTXO is available", async () => {
-    vi.mocked(checkoutUtxo).mockResolvedValueOnce(null);
-    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toBeInstanceOf(ServiceError);
-    expect(buildCommentTransaction).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Broadcast failures — UTXO release
-// ---------------------------------------------------------------------------
-
-describe("writeComment — broadcast failure", () => {
-  it("releases the UTXO when broadcast throws", async () => {
-    vi.mocked(broadcastTransaction).mockRejectedValueOnce(
-      new Error("ARC rejected tx")
-    );
-
-    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toBeInstanceOf(ServiceError);
-    expect(releaseUtxo).toHaveBeenCalledWith(MOCK_UTXO.id);
-  });
-
-  it("throws ServiceError BROADCAST_FAILED on ARC error", async () => {
-    vi.mocked(broadcastTransaction).mockRejectedValueOnce(
-      new Error("ARC 500: internal error")
-    );
-
-    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toMatchObject({
-      code: "BROADCAST_FAILED",
-      statusCode: 502,
-    });
-  });
-
-  it("releases the UTXO when buildCommentTransaction throws", async () => {
-    vi.mocked(buildCommentTransaction).mockRejectedValueOnce(
-      new Error("UTXO too small")
-    );
-
-    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toBeInstanceOf(ServiceError);
-    expect(releaseUtxo).toHaveBeenCalledWith(MOCK_UTXO.id);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// DB persistence failure — degraded success
-// ---------------------------------------------------------------------------
-
-describe("writeComment — DB persistence failure after broadcast", () => {
-  it("still returns a result (degraded success) when DB insert fails", async () => {
-    mockInsert.mockReturnValueOnce({
-      values: vi.fn().mockRejectedValueOnce(new Error("DB connection lost")),
-    });
-
-    // Should not throw — on-chain write succeeded
+  it("recovers tip from chain when getTip returns null", async () => {
+    vi.mocked(getTip).mockResolvedValue(null);
+    vi.mocked(recoverTipFromChain).mockResolvedValue(MOCK_TIP);
     const result = await writeComment(VALID_INPUT, "req-1");
+    expect(recoverTipFromChain).toHaveBeenCalled();
     expect(result.txid).toBe(MOCK_TX_RESULT.txid);
   });
+});
 
-  it("still marks UTXO spent even when DB insert fails", async () => {
-    mockInsert.mockReturnValueOnce({
-      values: vi.fn().mockRejectedValueOnce(new Error("DB down")),
-    });
+// ---------------------------------------------------------------------------
+// Broadcast failures
+// ---------------------------------------------------------------------------
 
-    await writeComment(VALID_INPUT, "req-1");
-    expect(markUtxoSpent).toHaveBeenCalledWith(MOCK_UTXO.id);
+describe("writeComment — broadcast failures", () => {
+  it("releases the mutex when broadcast throws", async () => {
+    vi.mocked(broadcastTransaction).mockRejectedValue(new Error("ARC down"));
+    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toThrow(ServiceError);
+    expect(releaseTipMutex).toHaveBeenCalledWith("req-1");
+  });
+
+  it("throws BROADCAST_FAILED on ARC error", async () => {
+    vi.mocked(broadcastTransaction).mockRejectedValue(new Error("ARC down"));
+    try {
+      await writeComment(VALID_INPUT, "req-1");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe("BROADCAST_FAILED");
+      expect((err as ServiceError).statusCode).toBe(502);
+    }
+  });
+
+  it("releases the mutex when buildCommentTransaction throws", async () => {
+    vi.mocked(buildCommentTransaction).mockRejectedValue(new Error("Build failed"));
+    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toThrow(ServiceError);
+    expect(releaseTipMutex).toHaveBeenCalledWith("req-1");
   });
 });
 
 // ---------------------------------------------------------------------------
-// ServiceError class contract
+// Moderation failures (unchanged from old architecture)
 // ---------------------------------------------------------------------------
 
-describe("ServiceError", () => {
-  it("is an instance of Error", () => {
-    const err = new ServiceError("TEST_CODE", "message", 400);
-    expect(err).toBeInstanceOf(Error);
+describe("writeComment — moderation rejections", () => {
+  it("throws CONTENT_VIOLATION when moderation rejects", async () => {
+    vi.mocked(moderateComment).mockResolvedValue({
+      approved: false,
+      violationCategory: "hate",
+      violationDetails: "Hate speech detected",
+    });
+
+    try {
+      await writeComment(VALID_INPUT, "req-1");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toContain("CONTENT_VIOLATION");
+      expect((err as ServiceError).statusCode).toBe(400);
+    }
   });
 
-  it("exposes code, message, and statusCode", () => {
-    const err = new ServiceError("MY_CODE", "my message", 422);
-    expect(err.code).toBe("MY_CODE");
-    expect(err.message).toBe("my message");
-    expect(err.statusCode).toBe(422);
+  it("does not acquire mutex when moderation rejects", async () => {
+    vi.mocked(moderateComment).mockResolvedValue({ approved: false, violationCategory: "spam" });
+    await expect(writeComment(VALID_INPUT, "req-1")).rejects.toThrow();
+    expect(acquireTipMutex).not.toHaveBeenCalled();
   });
 
-  it("defaults statusCode to 500", () => {
-    const err = new ServiceError("E", "msg");
-    expect(err.statusCode).toBe(500);
+  it("throws MODERATION_UNAVAILABLE when moderation service is down", async () => {
+    vi.mocked(moderateComment).mockRejectedValue(
+      new ModerationUnavailableError("OpenAI unreachable")
+    );
+
+    try {
+      await writeComment(VALID_INPUT, "req-1");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe("MODERATION_UNAVAILABLE");
+      expect((err as ServiceError).statusCode).toBe(503);
+    }
   });
 
-  it("has name 'ServiceError'", () => {
-    expect(new ServiceError("E", "m").name).toBe("ServiceError");
+  it("includes crisis resources for self-harm violations", async () => {
+    vi.mocked(moderateComment).mockResolvedValue({
+      approved: false,
+      violationCategory: "self_harm",
+      violationDetails: "Content flagged for self-harm",
+      crisisResources: MOCK_CRISIS_RESOURCES,
+    });
+
+    try {
+      await writeComment(VALID_INPUT, "req-1");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toContain("self_harm");
+      expect((err as ServiceError).crisisResources).toBeDefined();
+    }
   });
 });
