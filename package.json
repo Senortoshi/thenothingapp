@@ -11,6 +11,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "setup": "bun run scripts/setup.ts",
+    "fund-wallet": "npx tsx scripts/fund-wallet.ts",
     "prepare": "husky",
     "git:save": "node scripts/git-save.mjs"
   },
