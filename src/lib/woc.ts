@@ -57,6 +57,20 @@ export async function getTxHex(txid: string): Promise<string> {
   return hex;
 }
 
+export interface WocBalance {
+  confirmed: number;
+  unconfirmed: number;
+}
+
+export async function getAddressBalance(address: string): Promise<WocBalance> {
+  const res = await wocFetch(`/address/${encodeURIComponent(address)}/balance`);
+  const data = await res.json();
+  return {
+    confirmed: data.confirmed ?? 0,
+    unconfirmed: data.unconfirmed ?? 0,
+  };
+}
+
 export async function getAddressUtxos(address: string): Promise<WocUtxo[]> {
   const res = await wocFetch(
     `/address/${encodeURIComponent(address)}/unspent`
