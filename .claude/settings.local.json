@@ -1,7 +1,35 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(python3 C:Usersyoced.claudepluginscacheb-open-iobopen-tools1.1.2skillsremindscriptssearch.py 'wallet security identity system build from nothing' --limit 15 --json)",
+      "Bash(python3:*)",
+      "Bash(where python:*)",
+      "Bash(where node:*)",
+      "Bash(where bun:*)",
+      "Bash(node:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vitest:*)",
+      "Read(//c/Users/yoced/.claude//**)",
+      "Read(//c/Users/yoced/.claude/projects//**)",
+      "Bash(python3 -c \":*)",
+      "WebSearch",
+      "Skill(bopen-tools:\\\\hammertime:status)",
+      "Bash(bun run:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:arc.taal.com)",
+      "WebFetch(domain:bitcoin-sv.github.io)",
+      "WebFetch(domain:docs.taal.com)",
+      "WebFetch(domain:arc.gorillapool.io)",
+      "Bash(curl:*)",
+      "WebFetch(domain:api.whatsonchain.com)",
+      "WebFetch(domain:handcash.io)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "supabase"
+  ]
 }
